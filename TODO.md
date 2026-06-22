@@ -72,7 +72,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 - [x] `scaffold-9` Supply-chain integrity: deny.toml, integrity-hashes, cargo-audit/deny *(scaffold · 1d · scaffold-3)*
 - [ ] 🟡 `scaffold-7` Config-consistency tooling: verify-config.sh + Solscan cross-check *(scaffold · 0.5d · scaffold-5,6)* — script done; **operator must run on-chain Solscan verification of all Wave-1 IDs (esp. PumpSwap AMM)**
 - [x] `scaffold-8` Key/program-keypair gen script + secrets contract enforcement *(scaffold · 0.5d · scaffold-5)*
-- [ ] 🟡 `scaffold-11` LiteSVM + Surfpool test substrate wiring + smoke test *(scaffold · 1d · scaffold-4)* — LiteSVM 0.7 fully wired + loads the real build-sbf .so (program_exec.rs green); 🔒 Surfpool pool-clone pending
+- [ ] 🟡 `scaffold-11` LiteSVM + Surfpool test substrate wiring + smoke test *(scaffold · 1d · scaffold-4)* — LiteSVM 0.7 fully wired + loads the real build-sbf .so (program_exec.rs green). Surfpool 0.9.5 installed (snap); headless lazy mainnet-fork serves RPC + all 3 Wave-1 programs (Raydium CPMM/Orca Whirlpool/PumpSwap) lazy-fork as executable; `tests/scripts/run_surfpool.sh` launcher added. Residual: the Rust integration test (cheatcode client + real-pool differential) = onchain-11/testing-8
 - [x] `scaffold-10` CI pipeline: build/lint/test/lockfile/audit/config gates *(scaffold · 1d · scaffold-7,9,11)*
 - [x] ★ `onchain-1` Crate scaffold + entrypoint + verifiable-build setup *(onchain · 2d · scaffold-4)*
 - [x] ★ `sizing-1` Wide integer-math primitives: U256, mul_div, rounding *(sizing · 1.5d · scaffold-4)*
@@ -100,7 +100,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 - [ ] 🟡 ★ `onchain-8` Processor: snapshot→CPI A→delta→CPI B→terminal assert *(onchain · 3d · onchain-6,7)* — skeleton done; awaits real adapters
 - [x] ★ `onchain-9` LiteSVM unit tests: revert, success, trust-boundary, CU *(onchain · 3d · onchain-8)* — GREEN: success/revert-unprofitable + trust-boundary negatives (6001/6002, trust_boundary.rs) + Token-2022 filter negatives (7 BadExt, token2022_filter.rs) + measured CU<1.4M (cu_budget.rs) + zero-net-movement on revert (litesvm_unit.rs)
 - [ ] 🟡 ★ `onchain-10` Rounding-mirror fuzz/property gate (per-venue, both dirs) — **M1-GATE** *(onchain · 4d · onchain-9, sizing-8)* — Raydium CPMM venue GREEN via LiteSVM: both directions + 256-case fuzz over reserves+fee+amount (0 drift, shrink-to-minimal) + Token-2022 receipt-fee path (rounding_mirror_fuzz.rs + t22_fee.rs). Residual: Orca sqrt-price venue + Surfpool real-venue rounding (onchain-11)
-- [ ] 🔒 `onchain-11` Surfpool mainnet-fork integration test (revert on real programs) *(onchain · 3d · onchain-10)*
+- [ ] 🟡 `onchain-11` Surfpool mainnet-fork integration test (revert on real programs) *(onchain · 3d · onchain-10)* — substrate PROVEN (surfpool fork serves real Raydium/Orca/PumpSwap via run_surfpool.sh); remaining: deploy arb_program to the fork + clone a real pool + build the real-venue swap CPI + assert revert/differential (needs a test RPC client; ideally the keyed Chainstack node vs flaky public RPC)
 
 ### sizing
 - [x] `sizing-2` Token-2022 transfer-fee forward/inverse math *(sizing · 1d · sizing-1)*
