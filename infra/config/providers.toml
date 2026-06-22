@@ -1,0 +1,46 @@
+# Data-source + landing ladder (plan.md §8). Secrets are NEVER here — each endpoint names
+# the ENV VAR that holds its token. Default tier = first_profit (Chainstack Growth +
+# Yellowstone gRPC add-on); Helius Business $499/mo gRPC is DELIBERATELY skipped.
+
+cluster = "mainnet_beta"
+
+[data_source]
+active_tier = "first_profit"            # build_proof | first_profit | niche_firehose | competitive
+# Non-secret PUBLIC fallback. The Chainstack Solana node carries its key *inside* the URL
+# (https://nd-xxx.p2pify.com/<KEY>), so the real endpoint is resolved from the env var named
+# below and NEVER stored in this committed file. Resolver: DataSourceConfig::resolve_json_rpc.
+json_rpc = "https://api.mainnet-beta.solana.com"
+json_rpc_url_env = "CHAINSTACK_SOLANA_RPC_URL"      # overrides json_rpc when set & non-empty
+fallback_wss = "wss://api.mainnet-beta.solana.com"
+fallback_wss_url_env = "CHAINSTACK_SOLANA_WSS_URL"  # overrides fallback_wss when set & non-empty
+
+[data_source.grpc]
+# Chainstack Yellowstone gRPC add-on (Growth+ plan; flat add-on, no per-MB metering; $49=2
+# streams / $149=7 / $449=25; up to 50 accounts/stream). gRPC auth is the x-token HEADER
+# (token_env), unlike JSON-RPC whose secret is in the URL above.
+# TODO(provision): replace the placeholder host with the real per-node endpoint from the
+# Chainstack console (Node overview -> gRPC endpoint). The add-on + IP allowlisting are
+# console-only steps the migration cannot automate.
+url = "https://yellowstone.chainstack.example:443"
+token_env = "CHAINSTACK_GRPC_TOKEN"     # token resolved from env, never stored in toml
+commitment = "processed"                # lowest latency; reverted-slot risk acceptable (atomic reverts)
+max_streams = 2                          # Chainstack $49 add-on = 2 streams (=> up to 100 accounts; >100 needs $149/7-stream tier)
+
+[data_source.shredstream]
+proxy_addr = "127.0.0.1:20000"          # jito-labs/shredstream-proxy default UDP dest
+enabled = false                          # free; enable once allowlisted via Jito Discord
+
+[landing.jito]
+block_engine_url = "https://frankfurt.mainnet.block-engine.jito.wtf"
+auth_uuid_env = "JITO_AUTH_UUID"
+tip_inside_tx = true                     # HARD INVARIANT: tip lives inside the atomic tx
+tip_cap_bps = 5000                       # cap tip at 50% of simulated profit (plan.md §9)
+
+[landing.helius_sender]
+url = "https://sender.helius-rpc.com/fast"
+swqos_only = false                       # dual-route SWQoS + Jito (0 credits)
+enabled = true                           # explicit fallback only (routing exclusivity §10)
+
+# ---- Documentation of the deliberately-skipped tier (ignored by the loader) ----
+[skipped.helius_business]
+note = "Helius Business $499/mo gRPC mainnet — SKIPPED per plan.md §8; Chainstack wins per-dollar (~5x cheaper)."

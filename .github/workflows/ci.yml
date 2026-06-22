@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  host-gates:
+    name: build / lint / test / audit / config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the channel; this action honors it.
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy (-D warnings, incl. arb-math arithmetic_side_effects)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: build (locked)
+        run: cargo build --workspace --locked
+
+      - name: lockfile integrity
+        run: |
+          cargo build --workspace --locked
+          git diff --exit-code Cargo.lock
+
+      - name: test (host unit + property, incl. M1-GATE math)
+        run: cargo test --workspace --locked
+
+      - name: config-check (validate + program-id cross-check)
+        run: bash infra/scripts/verify-config.sh
+
+      - name: supply-chain audit
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo install cargo-deny  --locked || true
+          cargo audit || true              # advisory: surface, do not hard-fail Fase 0
+          cargo deny check
+          bash infra/audit/verify-integrity.sh
+
+  build-sbf:
+    name: build-sbf (Agave platform-tools)
+    runs-on: ubuntu-latest
+    continue-on-error: true   # until platform-tools pin is finalized (open decision §5.1)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Agave CLI (pinned)
+        run: |
+          AGAVE=$(grep -E '^agave_cli' infra/toolchain/versions.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          sh -c "$(curl -sSfL https://release.anza.xyz/v$AGAVE/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: build-sbf
+        run: cd onchain/arb-program && cargo build-sbf

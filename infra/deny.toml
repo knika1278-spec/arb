@@ -1,0 +1,42 @@
+# cargo-deny policy (supply-chain gate, invariant §11). `make audit` runs `cargo deny check`.
+# Enforces: no known-vuln/yanked deps, sources limited to crates.io + explicit git revs,
+# a license allowlist, and bans on risky crates (incl. the vulnerable web3.js range that the
+# malware cluster used — N/A to Rust but documented as a banned name).
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"      # no `*` version reqs — everything must be pinned
+deny = [
+    # Defense-in-depth: never let a JS-ecosystem trojan name slip into any tooling crate.
+    # (These are not Rust crates; listed to make the intent explicit + fail if ever added.)
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Git-pinned deps (jito-sdk-rust, yellowstone tracking release, etc.) are added here with
+# their exact host as they enter the workspace; their revs are integrity-hashed in
+# infra/audit/integrity-hashes.lock.
+allow-git = []

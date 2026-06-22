@@ -1,0 +1,32 @@
+# Pins for every NON-cargo tool, for reproducible bootstrap + CI parity.
+# `infra/scripts/install-toolchain.sh` installs exactly these and fails on mismatch.
+#
+# IMPORTANT: Anchor is TOOLING / PROTOTYPING ONLY. The on-chain hot path is native
+# `solana-program` (invariant §3). Do not build the production program with Anchor.
+
+[rust]
+# Mirrors rust-toolchain.toml. Aspirational Agave-matched pin (plan.md §8) is 1.79.0;
+# verified-compiling pin in this environment is 1.96.0 (OPEN DECISION — reconcile at deploy).
+channel = "1.96.0"
+
+[solana]
+# Agave CLI. plan.md §8 says "Agave 2.x/4.x"; workspace crates resolve to 2.3.x.
+# Provides `solana`, `cargo-build-sbf`, `solana-verify` platform-tools (the SBF rustc).
+# NOT installed in the current environment — required to build the on-chain .so.
+agave_cli = "2.3.0"
+
+[anchor]
+# Tooling/prototyping ONLY (IDLs, quick scaffolds). Never the production hot path.
+version = "0.31.1"
+tooling_only = true
+
+[test_substrate]
+# litesvm pin tracks the solana 2.3.x runtime crates (added to the workspace when the
+# testing module lands; needs the build-sbf .so to load the real program).
+litesvm = "0.6"
+surfpool = "latest"   # drop-in test-validator with lazy mainnet-fork + cheatcodes
+
+[supply_chain]
+cargo_audit = "0.21"
+cargo_deny = "0.16"
+solana_verify = "0.4"

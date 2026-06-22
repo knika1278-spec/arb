@@ -1,0 +1,23 @@
+[package]
+name = "arb-math"
+description = "Bit-exact integer swap math + CPMM sizing (M1-GATE core). no_std-capable."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+# `std` adds the f64 closed-form optimal-size *hint*. The exact integer ternary search
+# (used by the gate-critical path) is always available, even in no_std.
+default = ["std"]
+std = []
+
+[dependencies]
+arb-types = { workspace = true }
+uint = { workspace = true }
+
+[lints.clippy]
+# Every arithmetic op in this crate must be checked/explicit — silent wrap/overflow here
+# means a mispriced trade. Enforced as a hard error.
+arithmetic_side_effects = "deny"

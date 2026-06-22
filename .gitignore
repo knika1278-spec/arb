@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# Build artifacts
+# ---------------------------------------------------------------------------
+/target/
+**/target/
+*.so
+*.rlib
+*.rmeta
+**/*.rs.bk
+
+# ---------------------------------------------------------------------------
+# Secrets guard (load-bearing — invariant §11: hot keypairs NEVER in git)
+# Everything under /secrets is ignored EXCEPT the committed README + .gitkeep.
+# ---------------------------------------------------------------------------
+/secrets/**
+!/secrets/
+!/secrets/README.md
+!/secrets/.gitkeep
+
+# Keypairs / key material anywhere in the tree
+*keypair*.json
+*-keypair.json
+id.json
+hot-keypair.json
+*.pem
+*.key
+kill_switch
+kill-switch
+
+# Environment / local config with secrets
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Editor / OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Tooling caches
+# ---------------------------------------------------------------------------
+.surfpool/
+test-ledger/
+node_modules/

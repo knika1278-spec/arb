@@ -1,0 +1,37 @@
+name: verifiable-build
+
+# Reproducible/verifiable on-chain build (invariant §14 deploy posture). On a version tag,
+# produce a stable program hash artifact. CI only PRODUCES + VERIFIES the artifact — it never
+# holds the upgrade authority; deploy is gated by the Squads multisig (see ops/runbooks).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  verifiable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Agave + solana-verify (pinned)
+        run: |
+          AGAVE=$(grep -E '^agave_cli' infra/toolchain/versions.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          sh -c "$(curl -sSfL https://release.anza.xyz/v$AGAVE/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+          cargo install solana-verify --locked || true
+
+      - name: solana-verify build (twice, assert stable hash)
+        run: |
+          bash onchain/arb-program/build-verifiable.sh | tee build1.txt
+          bash onchain/arb-program/build-verifiable.sh | tee build2.txt
+          H1=$(grep -Eo '[0-9a-f]{64}' build1.txt | head -1)
+          H2=$(grep -Eo '[0-9a-f]{64}' build2.txt | head -1)
+          echo "hash1=$H1 hash2=$H2"
+          test -n "$H1" && [ "$H1" = "$H2" ] || { echo "non-deterministic build hash"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: program-hash
+          path: build1.txt

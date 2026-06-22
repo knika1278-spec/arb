@@ -1,0 +1,27 @@
+[package]
+name = "litesvm-tests"
+description = "LiteSVM/Surfpool test substrate. Fase-0 smoke; real revert proof needs build-sbf."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+arb-config = { workspace = true, features = ["std"] }
+arb-types = { workspace = true }
+arb-math = { workspace = true }
+# litesvm + the built arb-program .so are wired in Fase 1 once `cargo build-sbf` is
+# available (the revert proof loads the real program). Kept out of the Fase-0 graph so the
+# host build stays green without platform-tools.
+
+[dev-dependencies]
+# Real LiteSVM substrate (Fase-1). litesvm 0.7 → solana-program-runtime ^2.3 (matches the
+# agave 2.3.x toolchain + the build-sbf .so). Test-only: built with the host rustc, never
+# through build-sbf, so its edition2024 transitive deps do not touch the on-chain build.
+litesvm = "0.7"
+solana-sdk = "2.3"
+arb-program = { workspace = true, features = ["no-entrypoint"] }

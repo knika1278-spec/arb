@@ -1,0 +1,19 @@
+# Signer sidecar config (Fase 2). The signer holds ONLY the low-balance hot key and enforces
+# synchronous pre-sign caps + tx-shape validation before every signature (invariant §12).
+
+[keys]
+hot_keypair = "secrets/hot-keypair.json"   # 0o600; loaded only via arb_config::secrets
+
+[pre_sign_caps]
+# Synchronous, local — no RPC round-trip. Bounds worst-case outflow per window BEFORE the
+# lagging revert-rate/loss metrics can react.
+max_signs_per_interval = 50
+interval_secs = 10
+max_cumulative_lamports_out_per_interval = 200000000   # 0.2 SOL / 10s, tune from sizing
+
+[tx_shape]
+# The signer rejects anything that does not match the arb template.
+require_tip_inside_tx = true
+allow_only_allowlisted_programs = true     # mirrors arb_config::WAVE1_DEX_ALLOWLIST
+require_dest_is_own_ata = true
+max_lamports_out = 200000000

@@ -1,0 +1,21 @@
+[package]
+name = "analytics"
+description = "Backtest / golden-replay CLI (regression gate: realized vs predicted profit)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "arbit-analytics"
+path = "src/main.rs"
+
+[dependencies]
+arb-math = { workspace = true }
+arb-types = { workspace = true }
+# Reuse the SAME bit-exact sizing mirror + CostModel the bot uses — the replay gate must not fork
+# the math (observ-11). Depending on the bot lib keeps predicted == live.
+arb-bot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

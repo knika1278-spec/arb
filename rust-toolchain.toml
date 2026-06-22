@@ -1,0 +1,12 @@
+# Pinned so every dev, CI, and the solana-verify reproducible build use identical rustc.
+#
+# This is pinned to the version verified to compile the workspace (solana 2.3.x) in the
+# current build environment. `plan.md` §8 names 1.79.0 as the aspirational Agave-matched
+# pin; that is an OPEN DECISION (see implementation-plan.md §5.1 open questions) to be
+# reconciled against the Agave platform-tools rustc at deploy time. NOTE: the on-chain
+# program's bytecode is produced by `cargo build-sbf`, which uses the platform-tools
+# rustc, NOT this host channel — so this pin governs the OFF-CHAIN build + host tests.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "minimal"

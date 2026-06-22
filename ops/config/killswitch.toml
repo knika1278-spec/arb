@@ -1,0 +1,16 @@
+# Kill-switch supervisor thresholds (Fase 2). Metric trips lag (status polling is seconds);
+# they are paired with the signer's synchronous pre-sign caps (ops/config/signer.toml).
+# See ops/runbooks/killswitch_recovery.md.
+
+flag_path = "secrets/kill_switch"          # presence => halt; checked before every sign
+
+[thresholds]
+revert_rate_pct_over_5min = 30             # >30% = infra bug, not strategy
+burn_rate_lamports_per_min = 50000000      # losers' priority+base burn ceiling
+realized_loss_sol_per_hour = 0.5
+hot_key_balance_deviation_sol = 0.25
+
+[alerts]
+# routing: telegram | pagerduty | none ; on-call expectation documented in the runbook
+channel = "telegram"
+oncall = "unmanned-auto-halt-only"         # Fase 2 default: auto-halt, no human SLA yet

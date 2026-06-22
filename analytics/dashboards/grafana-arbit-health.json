@@ -1,0 +1,174 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus scraping the arb-bot /metrics exporter (observ-7)",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "title": "Arbit — Atomic Arbitrage Health",
+  "tags": ["arbit", "solana", "mev"],
+  "time": { "from": "now-3h", "to": "now" },
+  "refresh": "10s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Revert rate (%) — >30% = infra bug",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "arb_revert_rate_pct", "legendFormat": "revert-rate" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 30 }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": { "mode": "line+area" }
+          }
+        }
+      },
+      "alert": {
+        "name": "Revert rate > 30% / 5m",
+        "conditions": [
+          {
+            "evaluator": { "type": "gt", "params": [30] },
+            "query": { "params": ["A", "5m", "now"] },
+            "reducer": { "type": "avg", "params": [] },
+            "type": "query"
+          }
+        ],
+        "for": "5m",
+        "frequency": "1m",
+        "message": "Revert rate exceeded 30% — see ops/runbooks/killswitch_recovery.md#revert-rate"
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Burn rate (lamports/min) on reverted losers",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "arb_burn_rate_lamports_per_min", "legendFormat": "burn/min" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 50000000 }
+            ]
+          }
+        }
+      },
+      "alert": {
+        "name": "Burn rate > 0.05 SOL/min",
+        "conditions": [
+          {
+            "evaluator": { "type": "gt", "params": [50000000] },
+            "query": { "params": ["A", "5m", "now"] },
+            "reducer": { "type": "avg", "params": [] },
+            "type": "query"
+          }
+        ],
+        "for": "2m",
+        "frequency": "1m",
+        "message": "Burn rate exceeded 0.05 SOL/min — see ops/runbooks/killswitch_recovery.md#burn-rate"
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Submit→land latency P50/P95 (ms)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "arb_submit_latency_ms{quantile=\"0.5\"}", "legendFormat": "p50" },
+        { "refId": "B", "expr": "arb_submit_latency_ms{quantile=\"0.95\"}", "legendFormat": "p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Realized PnL (lamports)",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "arb_realized_pnl_lamports", "legendFormat": "pnl" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Last confirmation slot",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "arb_confirmation_slot", "legendFormat": "slot" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Attempts / lands / reverts (rate/min)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "rate(arb_attempts_total[1m])*60", "legendFormat": "attempts" },
+        { "refId": "B", "expr": "rate(arb_lands_total[1m])*60", "legendFormat": "lands" },
+        { "refId": "C", "expr": "rate(arb_reverts_total[1m])*60", "legendFormat": "reverts" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Realized slippage per route (bps) — predicted vs realized mirror",
+      "description": "Requires per-route slippage exposition (arb_realized_slippage_bps{venue_pair,direction}); 0 bps under the bit-exact M1-GATE mirror, nonzero = decode/stale drift.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "arb_realized_slippage_bps",
+          "legendFormat": "{{venue_pair}} {{direction}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ]
+}

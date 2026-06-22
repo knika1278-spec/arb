@@ -1,0 +1,41 @@
+[package]
+name = "arb-bot"
+description = "Off-chain hot-path bot (math/sizing/detection/txbuilder/executor/metrics)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "arb_bot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arb-bot"
+path = "src/main.rs"
+
+[dependencies]
+arb-config = { workspace = true, features = ["std"] }
+arb-types = { workspace = true }
+arb-math = { workspace = true }
+# linked no-entrypoint: reuse the program's instruction packer + Token-2022 vetting so the
+# tx-builder cannot drift from the on-chain ABI / trust boundary.
+arb-program = { workspace = true, features = ["no-entrypoint"] }
+solana-pubkey = { workspace = true }
+# Instruction/AccountMeta + PDA derivation for the tx-builder (host-green; no openssl).
+solana-program = { workspace = true }
+# Canonical token-instruction builders for the WSOL wrap/sync/close dance.
+spl-token = { workspace = true }
+# Signer module: hot-key (Keypair) + ed25519 sign/verify, openssl-free split crates.
+solana-keypair = { workspace = true }
+solana-signer = { workspace = true }
+solana-signature = { workspace = true }
+# v0 message compile (txbuilder-5): MessageV0::try_compile with the pre-warmed ALTs.
+solana-message = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

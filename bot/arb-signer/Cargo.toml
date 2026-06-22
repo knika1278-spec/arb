@@ -1,0 +1,18 @@
+[package]
+name = "arb-signer"
+description = "Isolated signer sidecar — holds ONLY the low-balance hot key; pre-sign caps + kill-switch."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "arb-signer"
+path = "src/main.rs"
+
+[dependencies]
+arb-config = { workspace = true, features = ["std"] }
+solana-signer = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

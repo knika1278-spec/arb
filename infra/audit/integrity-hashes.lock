@@ -1,0 +1,10 @@
+# Git-pinned dependency integrity hashes (invariant §11). Format: "<crate> <git-commit-sha>".
+# verify-integrity.sh fails if a git source in Cargo.lock drifts from the sha recorded here.
+#
+# Empty for Fase 0: the workspace currently uses only crates.io deps (exact-pinned in
+# Cargo.toml + checksummed in Cargo.lock). When git-pinned deps land (jito-sdk-rust, the
+# yellowstone-grpc tracking release), add a line here AND the host to infra/deny.toml
+# [sources].allow-git in the same PR.
+#
+# Example (commented until the dep is added):
+# jito-sdk-rust 0000000000000000000000000000000000000000

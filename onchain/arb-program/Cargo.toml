@@ -1,0 +1,28 @@
+[package]
+name = "arb-program"
+description = "Native-Rust TryArbitrage on-chain program (hot path; NOT Anchor)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+# `cdylib` is the build-sbf artifact; `lib` lets the host test harness + rounding-mirror
+# import the program's pure helpers.
+crate-type = ["cdylib", "lib"]
+
+[features]
+# `no-entrypoint` lets other crates (tests, the bot) link this as a library without pulling
+# in the program entrypoint symbol — the standard Solana pattern.
+no-entrypoint = []
+
+[dependencies]
+solana-program = { workspace = true }
+# no_std linkage: the program shares the SAME allowlist/limits as the bot, without std.
+arb-config = { workspace = true, default-features = false }
+arb-types = { workspace = true }
+
+[dev-dependencies]
+# the rounding-mirror gate imports the off-chain math to compare against on-chain realized
+arb-math = { workspace = true }

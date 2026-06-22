@@ -1,0 +1,10 @@
+# Documentation mirror of the compiled hard limits in crates/arb-config/src/limits.rs.
+# The COMPILED constants are authoritative; `config-check` fails if any value here drifts
+# from them. (plan.md §6 "Hard limits & KOREKSI".)
+
+max_tx_account_locks      = 128         # the binding ceiling — NOT 256
+max_loaded_accounts       = 256
+tx_size_limit_bytes       = 1232        # legacy AND v0; ALT does not raise this
+max_compute_unit_limit    = 1400000
+base_fee_lamports_per_sig = 5000
+cu_limit_sim_margin_bps   = 1000        # +10% over simulated CU

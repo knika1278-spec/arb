@@ -1,0 +1,85 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/arb-config",
+    "crates/arb-types",
+    "crates/arb-math",
+    "onchain/arb-program",
+    "bot/arb-bot",
+    "bot/arb-signer",
+    "tests/litesvm-tests",
+    "tests/swap-harness",
+    "analytics",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+rust-version = "1.84"
+publish = false
+
+# ---------------------------------------------------------------------------
+# Centralized, pinned dependency graph — the SINGLE place versions are declared.
+# Security-sensitive ecosystem crates (solana/spl/bytemuck/uint) use exact `=`
+# pins per plan.md §8 + invariant §11 (supply-chain). Ubiquitous utility crates
+# use caret ranges; the committed Cargo.lock pins their exact resolution.
+#
+# Versions are the ones VERIFIED to compile on the host toolchain (rustc 1.96,
+# solana 2.3.x). plan.md §8 names 2.1.0/1.79.0 as aspirational — see README.
+# Heavy module-specific deps (yellowstone-grpc, jito-sdk-rust, litesvm) are added
+# to this table when their owning module lands, to keep the Fase-0 build green.
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+# internal — arb-config defaults to its no_std core; std consumers opt in via features=["std"]
+arb-config  = { path = "crates/arb-config", default-features = false }
+arb-types   = { path = "crates/arb-types" }
+arb-math    = { path = "crates/arb-math" }
+# The off-chain bot lib, linked by the analytics CLI so the golden-replay gate reuses the live
+# sizing mirror + CostModel (no forked math — observ-11).
+arb-bot     = { path = "bot/arb-bot" }
+# The on-chain program linked as a LIBRARY (no-entrypoint) so the tx-builder packs the
+# `TryArbitrage` instruction and vets Token-2022 mints with the SAME code the program runs —
+# the canonical-layout + token2022 mirror cannot drift (invariants §6/§8). cdylib is only
+# emitted for a direct `build-sbf`; library consumers get the rlib.
+arb-program = { path = "onchain/arb-program", default-features = false }
+
+# solana / spl (exact pins)
+# NOTE: we deliberately avoid the umbrella `solana-sdk` for now — it drags in `openssl-sys`
+# (no OpenSSL toolchain on this host) and far more than needed. Keypair handling uses the
+# focused 2.x split crates instead. RPC-needing modules (detection/executor) will add
+# `solana-client` with rustls features in their phase to keep the build openssl-free.
+solana-program                = "=2.3.0"
+solana-pubkey                 = "=2.4.0"
+solana-keypair                = "=2.2.3"
+solana-signer                 = "=2.2.1"
+solana-signature              = "=2.3.0"
+# v0 message assembler (txbuilder-5 core): VersionedMessage + ALT compile. openssl-free.
+solana-message                = "=2.4.0"
+spl-token                     = "=6.0.0"
+spl-token-2022                = "=9.0.0"
+spl-associated-token-account  = "=7.0.0"
+
+# math (exact pins)
+bytemuck = { version = "=1.25.0", features = ["derive"] }
+uint     = "=0.9.5"
+
+# key hygiene — wipe hot-key material on drop (signer module)
+zeroize  = "1"
+
+# utility (caret; lockfile pins exact)
+thiserror          = "2"
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+toml               = "0.8"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[profile.release]
+overflow-checks = true   # arithmetic safety in the integer-math hot path (invariant)
+lto = "thin"
+codegen-units = 1
+panic = "unwind"         # onchain sbf build sets its own; host tests need unwind
+
+[profile.dev]
+overflow-checks = true

@@ -1,0 +1,6 @@
+# Workspace clippy configuration.
+# The arithmetic-overflow safety lint (clippy::arithmetic_side_effects) is enabled
+# crate-locally in the integer-math crate via #![deny(...)], not here.
+msrv = "1.96.0"
+# Flag any accidental hard-coded pubkey/secret-looking literals during review.
+disallowed-methods = []

@@ -1,0 +1,36 @@
+[
+  {
+    "id": "winner-cpmm-1",
+    "slot": 100,
+    "pool_a": { "reserve_a": 1000000, "reserve_b": 2000000, "fee_num": 25, "fee_den": 10000 },
+    "pool_b": { "reserve_a": 2000000, "reserve_b": 1100000, "fee_num": 25, "fee_den": 10000 },
+    "dir_a": 0,
+    "dir_b": 0,
+    "amount_in": 20989,
+    "recorded_realized_out": 22049,
+    "recorded_landed": true,
+    "spread_lamports": 20000,
+    "swap_fees_lamports": 2000,
+    "tip_lamports": 3000,
+    "prio_lamports": 2000,
+    "base_lamports": 5000,
+    "p_land": 0.8
+  },
+  {
+    "id": "loser-cpmm-1",
+    "slot": 101,
+    "pool_a": { "reserve_a": 1000000, "reserve_b": 1000000, "fee_num": 25, "fee_den": 10000 },
+    "pool_b": { "reserve_a": 1000000, "reserve_b": 1000000, "fee_num": 25, "fee_den": 10000 },
+    "dir_a": 0,
+    "dir_b": 0,
+    "amount_in": 50000,
+    "recorded_realized_out": 45242,
+    "recorded_landed": false,
+    "spread_lamports": 1000,
+    "swap_fees_lamports": 2000,
+    "tip_lamports": 0,
+    "prio_lamports": 2000,
+    "base_lamports": 5000,
+    "p_land": 0.2
+  }
+]

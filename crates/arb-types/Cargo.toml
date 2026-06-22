@@ -1,0 +1,11 @@
+[package]
+name = "arb-types"
+description = "Cross-module shared error/venue taxonomy (no_std) for onchain + offchain."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints.clippy]
+arithmetic_side_effects = "deny"

@@ -1,0 +1,44 @@
+# Human-editable, Solscan-verified program-id pins. `config-check` (arb_config::validate)
+# cross-checks every wave1/wave2 id against the compiled `program_ids.rs` const table and
+# fails on any divergence. Set `verified_on` to the date you confirmed the id on Solscan.
+#
+# INVARIANT: only `status = "verified"` Wave-1 swap venues may appear in the on-chain
+# allowlist. Prop-AMMs are `unverified` (partial prefixes only) and are NEVER allowlisted.
+
+[[wave1]]
+name = "raydium_cpmm"
+id = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C"
+status = "verified"
+verified_on = "PENDING_OPERATOR"   # TODO: confirm on Solscan, set YYYY-MM-DD
+
+[[wave1]]
+name = "orca_whirlpool"
+id = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
+status = "verified"
+verified_on = "PENDING_OPERATOR"
+
+[[wave1]]
+name = "pumpswap_amm"
+id = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+status = "verified"
+verified_on = "PENDING_OPERATOR"
+
+# ---- Deferred to Wave 2 (real venue, intentionally not yet integrated) ----
+[[wave2]]
+name = "raydium_amm_v4"
+id = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
+status = "deferred_wave2"
+
+# ---- Proprietary "dark" AMMs — ids only PARTIALLY captured in sources. UNVERIFIED.
+# Never allowlisted. Verify the full id on Solscan before ever relying on these.
+[[unverified_prop_amm]]
+name = "humidifi"
+id_prefix = "9H6tu"
+
+[[unverified_prop_amm]]
+name = "tessera"
+id_prefix = "TessV"
+
+[[unverified_prop_amm]]
+name = "goonfi"
+id_prefix = "goonER"

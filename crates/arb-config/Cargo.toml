@@ -1,0 +1,29 @@
+[package]
+name = "arb-config"
+description = "Single source of truth: program-id allowlist, hard limits, provider ladder, secrets."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+# `std` enables the provider/secrets/loader side. The program_ids + limits core is no_std
+# so the on-chain program can link it without std.
+default = ["std"]
+std = ["dep:serde", "dep:serde_json", "dep:toml", "dep:thiserror", "dep:solana-keypair", "dep:solana-signer"]
+
+[dependencies]
+arb-types = { workspace = true }
+solana-pubkey = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+solana-keypair = { workspace = true, optional = true }
+solana-signer = { workspace = true, optional = true }
+
+[[bin]]
+name = "config-check"
+path = "src/bin/config_check.rs"
+required-features = ["std"]

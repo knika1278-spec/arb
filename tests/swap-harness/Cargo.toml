@@ -1,0 +1,14 @@
+[package]
+name = "swap-harness"
+description = "TEST-ONLY constant-product swap program for the LiteSVM M1-GATE differential; deployed at allowlisted DEX ids to exercise arb-program. NOT for mainnet."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program = { workspace = true }
