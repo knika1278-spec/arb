@@ -1704,7 +1704,9 @@ dependencies = [
  "arb-math",
  "arb-program",
  "arb-types",
+ "bincode",
  "litesvm",
+ "serde_json",
  "solana-sdk",
 ]
 

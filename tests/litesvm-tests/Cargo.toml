@@ -25,3 +25,8 @@ arb-math = { workspace = true }
 litesvm = "0.7"
 solana-sdk = "2.3"
 arb-program = { workspace = true, features = ["no-entrypoint"] }
+# Surfpool mainnet-fork integration (onchain-11/testing-8): a dependency-free JSON-RPC client
+# (std::net) drives the surfnet_* cheatcodes + sendTransaction; serde_json builds the requests,
+# bincode serializes the signed tx. Test-only, off the on-chain build.
+serde_json = { workspace = true }
+bincode = "1"
