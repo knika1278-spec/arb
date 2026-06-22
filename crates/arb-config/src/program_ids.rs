@@ -47,7 +47,9 @@ pub const fn is_allowlisted_swap_program(program_id: &Pubkey) -> bool {
 /// Verification status of a pinned id, for the config↔Solscan cross-check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgramIdStatus {
-    /// Verified on Solscan on the given date (operator step).
+    /// Verified on-chain on the given date: `getAccountInfo` showed `executable = true` with
+    /// owner `BPFLoaderUpgradeable` (PumpSwap identity also Solscan-cross-checked). The field
+    /// name is historical; the check is the authoritative on-chain read that Solscan renders.
     Verified { solscan_checked_on: &'static str },
     /// Real venue, intentionally deferred to Wave 2.
     DeferredWave2,
@@ -73,7 +75,7 @@ pub const PROGRAM_ID_TABLE: &[ProgramIdEntry] = &[
         name: "raydium_cpmm",
         id: RAYDIUM_CPMM,
         status: ProgramIdStatus::Verified {
-            solscan_checked_on: "PENDING_OPERATOR",
+            solscan_checked_on: "2026-06-22",
         },
         wave1_swap_venue: true,
     },
@@ -81,7 +83,7 @@ pub const PROGRAM_ID_TABLE: &[ProgramIdEntry] = &[
         name: "orca_whirlpool",
         id: ORCA_WHIRLPOOL,
         status: ProgramIdStatus::Verified {
-            solscan_checked_on: "PENDING_OPERATOR",
+            solscan_checked_on: "2026-06-22",
         },
         wave1_swap_venue: true,
     },
@@ -89,7 +91,7 @@ pub const PROGRAM_ID_TABLE: &[ProgramIdEntry] = &[
         name: "pumpswap_amm",
         id: PUMPSWAP_AMM,
         status: ProgramIdStatus::Verified {
-            solscan_checked_on: "PENDING_OPERATOR",
+            solscan_checked_on: "2026-06-22",
         },
         wave1_swap_venue: true,
     },

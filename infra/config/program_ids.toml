@@ -1,6 +1,11 @@
-# Human-editable, Solscan-verified program-id pins. `config-check` (arb_config::validate)
+# Human-editable, on-chain-verified program-id pins. `config-check` (arb_config::validate)
 # cross-checks every wave1/wave2 id against the compiled `program_ids.rs` const table and
-# fails on any divergence. Set `verified_on` to the date you confirmed the id on Solscan.
+# fails on any divergence. `verified_on` records the date the id was confirmed on-chain.
+#
+# VERIFIED 2026-06-22 via on-chain `getAccountInfo` (Chainstack mainnet): every Wave-1 id is
+# `executable = true` and owned by `BPFLoaderUpgradeab1e11111111111111111111111`; PumpSwap
+# identity cross-checked on Solscan ("Pump.fun AMM" label) + pump-fun public docs. WSOL
+# native_mint is (correctly) a non-executable mint owned by the Token program.
 #
 # INVARIANT: only `status = "verified"` Wave-1 swap venues may appear in the on-chain
 # allowlist. Prop-AMMs are `unverified` (partial prefixes only) and are NEVER allowlisted.
@@ -9,19 +14,19 @@
 name = "raydium_cpmm"
 id = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C"
 status = "verified"
-verified_on = "PENDING_OPERATOR"   # TODO: confirm on Solscan, set YYYY-MM-DD
+verified_on = "2026-06-22"   # on-chain getAccountInfo: executable=true, owner=BPFLoaderUpgradeable
 
 [[wave1]]
 name = "orca_whirlpool"
 id = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
 status = "verified"
-verified_on = "PENDING_OPERATOR"
+verified_on = "2026-06-22"   # on-chain getAccountInfo: executable=true, owner=BPFLoaderUpgradeable
 
 [[wave1]]
 name = "pumpswap_amm"
 id = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 status = "verified"
-verified_on = "PENDING_OPERATOR"
+verified_on = "2026-06-22"   # on-chain getAccountInfo: executable=true, owner=BPFLoaderUpgradeable
 
 # ---- Deferred to Wave 2 (real venue, intentionally not yet integrated) ----
 [[wave2]]

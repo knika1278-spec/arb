@@ -22,7 +22,7 @@
 
 ## Status snapshot (2026-06-22)
 
-Workspace is **green**: `cargo build/test/clippy -D warnings/fmt` pass (**234 host tests** + the LiteSVM M1-GATE suite, host + WSL), `config-check` validates.
+Workspace is **green**: `cargo build/test/clippy -D warnings/fmt` pass (**234 host tests** + 16 new arb-math whirlpool tests (sizing-5) + the LiteSVM M1-GATE suite, host + WSL), `config-check` validates. **Fase 0 is now COMPLETE (20/20)** — Wave-1 program IDs verified on-chain, M0 milestone green.
 
 > **2026-06-22 BREAKTHROUGH — `build-sbf` + M1-GATE unblocked (WSL2 Ubuntu 24.04).** The on-chain `.so` now builds (`cargo build-sbf --tools-version v1.54`, agave 2.3.13) and the **M1-GATE rounding-mirror differential is GREEN for the constant-product path** in LiteSVM (`tests/litesvm-tests/tests/m1_gate.rs` + `tests/swap-harness`): on-chain realized round-trip == off-chain `arb_math::RoundTrip::realized_out`, bit-exact (3 sizes), plus revert-on-unprofitable + reject-non-allowlisted-dex. CPI discriminators filled (Anchor sha256). **dec-1 closed = Agave 2.3.x.** Residual for FULL M1-GATE: Surfpool real-venues (onchain-11), Token-2022 fee path, BtoA/Orca sqrt-price.
 
@@ -65,6 +65,8 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 
 *Exit: workspace builds w/ committed lockfile; arb-config/arb-types consumable; all Wave-1 program IDs verified on Solscan; onchain skeleton builds + LiteSVM smoke green; supply-chain gate green; hot-key chmod 600.*
 
+> ✅ **Fase 0 COMPLETE (2026-06-22)** — all 20 tasks closed. Final closures this session: scaffold-7 + detection-1 (Wave-1 program IDs verified **on-chain** via `getAccountInfo`: all `executable=true`, owner `BPFLoaderUpgradeable`; PumpSwap identity Solscan-cross-checked), landing-1 (Jito UUID provisioned, `getTipAccounts`→8 + Helius reachable confirmed, ExecutorConfig validated), scaffold-11 (LiteSVM smoke + Surfpool fork/clone proven, commits 1b4c80f/5e2807f).
+
 - [x] ★ `scaffold-1` Init git repo, monorepo skeleton, .gitignore secrets guard *(scaffold · 0.5d · —)*
 - [x] ★ `scaffold-2` Pin toolchain: rust-toolchain.toml + versions.toml + bootstrap *(scaffold · 1d · scaffold-1)*
 - [x] `scaffold-6` Author infra/config TOMLs: program_ids, providers, limits *(scaffold · 0.5d · scaffold-1)*
@@ -72,18 +74,18 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 - [x] ★ `scaffold-4` arb-config no_std core: program_ids + limits constants *(scaffold · 1d · scaffold-3)*
 - [x] `scaffold-5` arb-config std: providers/landing, secrets loader, loader+validate *(scaffold · 1.5d · scaffold-4,6)*
 - [x] `scaffold-9` Supply-chain integrity: deny.toml, integrity-hashes, cargo-audit/deny *(scaffold · 1d · scaffold-3)*
-- [ ] 🟡 `scaffold-7` Config-consistency tooling: verify-config.sh + Solscan cross-check *(scaffold · 0.5d · scaffold-5,6)* — script done; **operator must run on-chain Solscan verification of all Wave-1 IDs (esp. PumpSwap AMM)**
+- [x] `scaffold-7` Config-consistency tooling: verify-config.sh + Solscan cross-check *(scaffold · 0.5d · scaffold-5,6)* — verify-config.sh + `arb_config::validate` cross-check done; **all Wave-1 IDs VERIFIED on-chain 2026-06-22** via `getAccountInfo` (Chainstack mainnet): each `executable=true`, owner `BPFLoaderUpgradeable`; PumpSwap identity cross-checked on Solscan ("Pump.fun AMM") + pump-fun docs. `program_ids.toml`/`.rs` `verified_on` dates set; 0 `PENDING_OPERATOR` markers; config-check + 20 arb-config tests green.
 - [x] `scaffold-8` Key/program-keypair gen script + secrets contract enforcement *(scaffold · 0.5d · scaffold-5)*
-- [ ] 🟡 `scaffold-11` LiteSVM + Surfpool test substrate wiring + smoke test *(scaffold · 1d · scaffold-4)* — LiteSVM 0.7 fully wired + loads the real build-sbf .so (program_exec.rs green). Surfpool 0.9.5 installed (snap); headless lazy mainnet-fork serves RPC + all 3 Wave-1 programs (Raydium CPMM/Orca Whirlpool/PumpSwap) lazy-fork as executable; `tests/scripts/run_surfpool.sh` launcher added. Residual: the Rust integration test (cheatcode client + real-pool differential) = onchain-11/testing-8
+- [x] `scaffold-11` LiteSVM + Surfpool test substrate wiring + smoke test *(scaffold · 1d · scaffold-4)* — LiteSVM 0.7 loads the real build-sbf .so (`program_exec.rs`); Surfpool 0.9.5 headless lazy mainnet-fork serves all 3 Wave-1 programs + clones pools (`run_surfpool.sh` + `surfpool_integration.rs`, commits `1b4c80f`/`5e2807f`); harness reads ids from arb-config (`common/mod.rs`), no hardcoded ids. Done-when met. (Deeper real-VENUE differential = onchain-11/testing-8; re-run needs WSL.)
 - [x] `scaffold-10` CI pipeline: build/lint/test/lockfile/audit/config gates *(scaffold · 1d · scaffold-7,9,11)*
 - [x] ★ `onchain-1` Crate scaffold + entrypoint + verifiable-build setup *(onchain · 2d · scaffold-4)*
 - [x] ★ `sizing-1` Wide integer-math primitives: U256, mul_div, rounding *(sizing · 1.5d · scaffold-4)*
-- [ ] 🟡 `detection-1` Detection config + venue program-id verification *(detection · 1.5d · scaffold-5,6)* — config done; on-chain ID verification pending operator
+- [x] `detection-1` Detection config + venue program-id verification *(detection · 1.5d · scaffold-5,6)* — config done (`DataSourceConfig`/`Commitment` default=Processed, gRPC/shredstream, env-indirected secrets); **all 3 Wave-1 venue IDs VERIFIED on-chain 2026-06-22** (see scaffold-7). OwnerFirehose-on-SPL-vault guard deferred with the Fase-3 owner-firehose feature (detection-10), not active in M1.
 - [x] `txbuilder-1` Module scaffold, config, hard-limit constants *(txbuilder · 1.5d · scaffold-4)*
 - [x] `txbuilder-2` ComputeBudget instruction builder + measured-CU sizing *(txbuilder · 1d · txbuilder-1)*
 - [x] `signer-1` Key security baseline + supply-chain hygiene gate *(signer · 2d · scaffold-1,9)*
 - [x] `signer-2` SolanaSigner trait + MemorySigner hot-key backend *(signer · 2d · signer-1, scaffold-5)* — keychain.rs: trait + MemorySigner (solana-keypair/signer/signature, openssl-free) + only-Memory-hot-path assert
-- [ ] `landing-1` Jito account, UUID and Sender baseline (Fase 0 setup seam) *(landing · 2d · scaffold-1)* — operator account provisioning + code seam
+- [x] `landing-1` Jito account, UUID and Sender baseline (Fase 0 setup seam) *(landing · 2d · scaffold-1)* — Jito allowlisted UUID provisioned (`JITO_AUTH_UUID` in .env); endpoints pinned (`providers.toml`: frankfurt block-engine + Helius Sender `/fast`); `ExecutorConfig::validate` rejects tip band ∉[0.50,0.75] + profit_cap_frac ∉(0,1] (tested). Runtime CONFIRMED 2026-06-22: `getTipAccounts`→8 accounts, Helius Sender reachable (TLS connect ok). (x-jito-auth header usage + getTipAccounts TTL cache = landing-2, Fase 2.)
 - [x] `testing-1` Fase 0: toolchain + LiteSVM bootstrap + skeleton build *(testing · 2d · onchain-1, scaffold-11)*
 
 ---
@@ -289,8 +291,8 @@ The completeness pass found these load-bearing items unowned in the DAG. Items (
 
 ## Integration milestones (go/no-go checkpoints)
 
-- [ ] 🟡 **M0** Workspace foundation green — scaffold-3,4,7,9,10 *(blocked only on scaffold-7 Solscan verification)*
-- [ ] 🟡 **M0.5** Skeleton builds + LiteSVM revert proven — onchain-1,8,9, scaffold-11, testing-1 — **build-sbf works; LiteSVM revert + measured CU + Token-2022/trust-boundary negatives all GREEN** (onchain-9 closed); only scaffold-11 Surfpool pool-clone residual
+- [x] **M0** Workspace foundation green — scaffold-3,4,7,9,10 ✅ *(scaffold-7 Wave-1 IDs verified on-chain 2026-06-22; Fase 0 fully closed)*
+- [ ] 🟡 **M0.5** Skeleton builds + LiteSVM revert proven — onchain-1,8,9, scaffold-11, testing-1 — **build-sbf works; LiteSVM revert + measured CU + Token-2022/trust-boundary negatives all GREEN** (onchain-9 + scaffold-11 closed); residual = onchain-8 processor real-adapter wiring (awaits onchain-6/7)
 - [ ] 🟡 **M1-GATE** Rounding-mirror gate — **THE hard go/no-go** — **Raydium CPMM GREEN in LiteSVM: both directions + 256-case fuzz over reserves+fee+amount (0 drift, minimal-counterexample shrink) + Token-2022 receipt-fee path**; Orca sqrt-price **off-chain** mirror now DONE + audited bit-exact (sizing-5). NOT fully closed: needs the Orca **on-chain** `swap_v2` CPI differential (onchain-7) + Surfpool real-venue rounding before mainnet capital — sizing-8, onchain-9,10, sizing-9, testing-5
 - [ ] 🔒 **M1.5** Atomic tx builds + reverts on real programs (fork) — txbuilder-5,6,9,12, onchain-11, testing-8
 - [ ] ⚠️ **NICHE-COVERAGE go/no-go (added 2026-06-22)** — before Fase-2 capital, confirm Wave-1 (Raydium CPMM + Orca Whirlpool + PumpSwap) actually reaches a live opportunity stream. On-chain audit evidence: pump.fun graduations land on PumpSwap (✓ Wave-1) but the deepest mispricings observed (ANB) were **intra-Meteora (DAMM v2 ↔ DLMM)** and the dex-to-dex sample's sell leg was **Raydium CLMM** — both outside the *original* Wave-1 set. Decision: either accept the narrower CPMM/Whirlpool/PumpSwap slice for first-land, or gate first-land behind Fase 2.5 venues. See `plan.md` §4 + §10.
