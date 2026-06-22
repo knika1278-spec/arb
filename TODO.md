@@ -118,7 +118,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 
 ### detection
 - [x] `detection-2` Core model + SessionStamp dedupe types *(detection · 1d · detection-1)*
-- [ ] 🟡 `detection-3` Per-venue decoders (CPMM vaults+PoolState, Whirlpool, PumpSwap) *(detection · 4d · detection-2)* — decode.rs done; **field offsets TODO-verify against IDL**
+- [ ] 🟡 `detection-3` Per-venue decoders (CPMM vaults+PoolState, Whirlpool, PumpSwap) *(detection · 4d · detection-2)* — **Orca Whirlpool + Raydium CP-Swap decoders VERIFIED against canonical structs + REAL mainnet accounts** (real-bytes `include_bytes!` tests; commits `f1c88ca`/`952e2cf`): Whirlpool (sqrt_price@65, liquidity@49, tick_current@81, fee_rate@45, tick_spacing@41, mints+vaults + discriminator) confirmed via 3 SOL/USDC pools (tick↔sqrt mutually consistent); Raydium PoolState (vaults/mints/amm_config) + AmmConfig `trade_fee_rate@12` (=2500 → 0.25%, denom 1e6). Residual: **PumpSwap Pool** decoder (Fase-2 venue) — gPA over PumpSwap times out + sample tx uses ALTs, so a real-pool cross-check is still pending (field order known, offsets not yet real-verified).
 - [x] `detection-4` Idempotent pool-state cache + CPMM multi-component assembly *(detection · 3d · detection-3)*
 - [ ] 🟡 `detection-5` Yellowstone gRPC ingest client *(detection · 2.5d · detection-2)* — seam (AccountUpdateSource + MockSource) done; 🔒 real client deferred (heavy crate)
 - [x] `detection-6` Token-pair graph + incremental edge recompute *(detection · 2d · detection-4)*
