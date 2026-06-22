@@ -31,10 +31,18 @@ use solana_program::entrypoint::ProgramResult;
 use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 
-/// MUST match the `arb_math::cpmm` test pools.
-const FEE_NUM: u128 = 25;
-const FEE_DEN: u128 = 10_000;
+/// Default fee when a pool account carries no explicit fee (bytes 165..181). MUST match
+/// `arb_math::cpmm` / `common::DEFAULT_FEE_*` so the rounding mirror stays bit-exact.
+const DEFAULT_FEE_NUM: u128 = 25;
+const DEFAULT_FEE_DEN: u128 = 10_000;
 const AMOUNT_OFFSET: usize = 64;
+/// Optional per-pool fee the rounding-mirror fuzz writes into the pool_src account so it can
+/// sweep fee (not just reserves). u64 LE each; absent/zero-den ⇒ default above.
+const FEE_NUM_OFFSET: usize = 165;
+const FEE_DEN_OFFSET: usize = 173;
+/// Optional Token-2022 receipt transfer fee on a `user_dest` account (bps u16 @181, max u64 @183).
+const RECV_BPS_OFFSET: usize = 181;
+const RECV_MAX_OFFSET: usize = 183;
 
 entrypoint!(process_instruction);
 
@@ -53,28 +61,44 @@ fn process_instruction(
     let pool_src = &accounts[2];
     let pool_dst = &accounts[3];
 
-    // Pre-trade reserves: exactly what the off-chain mirror is quoted against.
+    // Pre-trade reserves + fee: exactly what the off-chain mirror is quoted against.
     let reserve_in = read_amount(pool_src)?;
     let reserve_out = read_amount(pool_dst)?;
-    let out =
-        cp_quote_out(reserve_in, reserve_out, amount_in).ok_or(ProgramError::ArithmeticOverflow)?;
+    let (fee_num, fee_den) = read_fee(pool_src);
+    let out = cp_quote_out(reserve_in, reserve_out, fee_num, fee_den, amount_in)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
 
-    // Move value (this program owns all four accounts on-chain).
+    // Move value (this program owns all four accounts on-chain). A Token-2022 receipt fee tagged
+    // on `user_dest` is skimmed from the credited amount — the fee "vanishes" to the mint's
+    // withheld-fees exactly as spl-token-2022 does, so the arb-program measures the NET delta.
+    let (recv_bps, recv_max) = read_recv_fee(user_dest);
+    let net_out = out
+        .checked_sub(transfer_fee(out, recv_bps, recv_max))
+        .ok_or(ProgramError::ArithmeticOverflow)?;
     debit(user_source, amount_in)?;
     credit(pool_src, amount_in)?;
     debit(pool_dst, out)?;
-    credit(user_dest, out)?;
+    credit(user_dest, net_out)?;
     Ok(())
 }
 
 /// Floored constant-product output, fee on the input first — BIT-IDENTICAL to
 /// `arb_math::cpmm::quote_out`.
-fn cp_quote_out(reserve_in: u64, reserve_out: u64, amount_in: u64) -> Option<u64> {
+fn cp_quote_out(
+    reserve_in: u64,
+    reserve_out: u64,
+    fee_num: u128,
+    fee_den: u128,
+    amount_in: u64,
+) -> Option<u64> {
+    if fee_den == 0 || fee_num > fee_den {
+        return None;
+    }
     if amount_in == 0 || reserve_in == 0 || reserve_out == 0 {
         return Some(0);
     }
-    let net = FEE_DEN.checked_sub(FEE_NUM)?;
-    let in_after_fee = (amount_in as u128).checked_mul(net)?.checked_div(FEE_DEN)?;
+    let net = fee_den.checked_sub(fee_num)?;
+    let in_after_fee = (amount_in as u128).checked_mul(net)?.checked_div(fee_den)?;
     if in_after_fee == 0 {
         return Some(0);
     }
@@ -92,6 +116,56 @@ fn read_amount(ai: &AccountInfo) -> Result<u64, ProgramError> {
         .get(AMOUNT_OFFSET..AMOUNT_OFFSET + 8)
         .ok_or(ProgramError::InvalidAccountData)?;
     Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+/// Per-pool fee `(num, den)` from bytes 165..181 of the reserve-in account; default 25/10_000
+/// when absent or invalid (so the original 165-byte gate accounts keep the Raydium fee).
+fn read_fee(ai: &AccountInfo) -> (u128, u128) {
+    if let Ok(data) = ai.try_borrow_data() {
+        if data.len() >= FEE_DEN_OFFSET + 8 {
+            let fnum =
+                u64::from_le_bytes(data[FEE_NUM_OFFSET..FEE_NUM_OFFSET + 8].try_into().unwrap())
+                    as u128;
+            let fden =
+                u64::from_le_bytes(data[FEE_DEN_OFFSET..FEE_DEN_OFFSET + 8].try_into().unwrap())
+                    as u128;
+            if fden != 0 && fnum <= fden {
+                return (fnum, fden);
+            }
+        }
+    }
+    (DEFAULT_FEE_NUM, DEFAULT_FEE_DEN)
+}
+
+/// Token-2022 receipt transfer fee `(bps, max)` tagged on a `user_dest` account at bytes
+/// 181..191; `(0, 0)` (no skim) when absent.
+fn read_recv_fee(ai: &AccountInfo) -> (u16, u64) {
+    if let Ok(data) = ai.try_borrow_data() {
+        if data.len() >= RECV_MAX_OFFSET + 8 {
+            let bps = u16::from_le_bytes(
+                data[RECV_BPS_OFFSET..RECV_BPS_OFFSET + 2]
+                    .try_into()
+                    .unwrap(),
+            );
+            let max = u64::from_le_bytes(
+                data[RECV_MAX_OFFSET..RECV_MAX_OFFSET + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            return (bps, max);
+        }
+    }
+    (0, 0)
+}
+
+/// Ceiling transfer fee capped at `max` — bit-identical to `arb_math::fees::calculate_fee`.
+fn transfer_fee(amount: u64, bps: u16, max: u64) -> u64 {
+    if bps == 0 || amount == 0 {
+        return 0;
+    }
+    let numerator = (amount as u128).saturating_mul(bps as u128);
+    let raw = numerator.saturating_add(10_000 - 1) / 10_000; // ceil
+    raw.min(max as u128) as u64
 }
 
 fn write_amount(ai: &AccountInfo, v: u64) -> Result<(), ProgramError> {

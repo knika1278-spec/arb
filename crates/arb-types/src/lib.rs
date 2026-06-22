@@ -35,6 +35,10 @@ pub enum ArbError {
     NoArbitrage = 6008,
     /// An account expected to be a writable signer was not.
     MissingRequiredSignature = 6009,
+    /// Round-trip did not close: leg B failed to consume the intermediate asset back to its
+    /// pre-trade level, so the route would strand inventory (a mis-resolved second leg) even
+    /// if the base balance grew. The inventory-safety invariant (plan §6 / add-2).
+    RouteDoesNotClose = 6010,
 }
 
 impl ArbError {
@@ -57,6 +61,7 @@ impl ArbError {
             6007 => Some(Self::ArithmeticOverflow),
             6008 => Some(Self::NoArbitrage),
             6009 => Some(Self::MissingRequiredSignature),
+            6010 => Some(Self::RouteDoesNotClose),
             _ => None,
         }
     }
@@ -212,12 +217,13 @@ mod tests {
     fn error_codes_are_stable_and_roundtrip() {
         assert_eq!(ArbError::Unprofitable.code(), 6000);
         assert_eq!(ArbError::MissingRequiredSignature.code(), 6009);
-        for code in 6000..=6009u32 {
+        assert_eq!(ArbError::RouteDoesNotClose.code(), 6010);
+        for code in 6000..=6010u32 {
             let e = ArbError::from_code(code).expect("known code");
             assert_eq!(e.code(), code);
         }
         assert_eq!(ArbError::from_code(5999), None);
-        assert_eq!(ArbError::from_code(6010), None);
+        assert_eq!(ArbError::from_code(6011), None);
     }
 
     #[test]

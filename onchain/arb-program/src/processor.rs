@@ -102,6 +102,15 @@ pub fn process(
         },
     )?;
 
+    // ---- add-2: round-trip closure — the intermediate asset must be fully consumed back to
+    // its pre-trade level (leg B spent exactly the measured leg-A delta). A mis-resolved leg B
+    // that strands the intermediate yet still grows the base is rejected here, before the
+    // profit-assert — the inventory-safety invariant (no base<->intermediate drift; §6/add-2).
+    let intermediate_after_b = read_token_amount(intermediate_ata)?;
+    if intermediate_after_b != pre_intermediate {
+        return Err(to_program_error(ArbError::RouteDoesNotClose));
+    }
+
     // ---- Terminal profit-assert: post_base >= pre_base + min_profit, else revert ALL ----
     let post_base = read_token_amount(base_ata)?;
     let required = pre_base.checked_add(data.min_profit).ok_or_else(overflow)?;
