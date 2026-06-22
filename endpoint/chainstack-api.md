@@ -17,6 +17,25 @@
 
 ---
 
+## 0. Live validation — **all three transports PASS (2026-06-23)**
+
+Real calls against the provisioned node (`solana-mainnet.core.chainstack.com`), not just config parsing:
+
+| Transport | Auth | Result |
+|---|---|---|
+| **JSON-RPC (HTTPS)** | Basic Auth, bare host | ✅ `getHealth=ok`; `getVersion`=solana-core **4.1.0-beta.2**; `getSlot`, `getEpochInfo` (epoch 991), `getLatestBlockhash`, `getRecentPrioritizationFees` all **HTTP 200** (~0.3 s) |
+| **WebSocket (WSS)** | Basic Auth, bare host | ✅ `slotSubscribe` acked + live `slotNotification` |
+| **Yellowstone gRPC** | `x-token` metadata | ✅ TLS `h2` negotiated; `GetVersion` → geyser **13.3.0 / proto 12.5.0**; `Subscribe` streamed a live slot |
+
+- **Auth model confirmed end-to-end:** Basic Auth (username/password) for RPC+WSS, `x-token` for gRPC —
+  exactly what `DataSourceConfig::resolve_basic_auth` / `GrpcEndpoint::token_env` assume.
+- **Pin for `detection-5`:** the server runs **yellowstone-grpc-geyser 13.3.0 (proto 12.5.0)** → pin the
+  `yellowstone-grpc-client` Rust crate to the matching 13.x/proto-12.x line.
+- Method: `curl` (RPC) · python `websockets` (WSS) · python `grpcio` against the compiled geyser proto
+  (`GetVersion` unary + `Subscribe` stream).
+
+---
+
 ## 1. Authentication model (the `.env` reconciliation) — **confirmed**
 
 A single Chainstack node exposes **two credential sets for JSON-RPC/WSS** (pick one *per URL*) plus a
