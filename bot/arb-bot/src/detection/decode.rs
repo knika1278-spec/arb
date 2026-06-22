@@ -1,9 +1,9 @@
-//! Per-venue account decoding. The Orca **Whirlpool** decoder + field offsets are **VERIFIED**
-//! (2026-06-23) against the canonical `Whirlpool` struct and three real mainnet accounts — see
-//! [`decode_whirlpool`] / [`whirlpool_offsets`] and the `decodes_real_whirlpool_account` test.
-//! Raydium CPMM `PoolState` + PumpSwap `Pool` field offsets are still TODO-verify against their
-//! IDLs/real accounts. The verifiable primitives — SPL vault `amount` read, sqrtPriceX64→price,
-//! Anchor discriminator check — are implemented and tested here.
+//! Per-venue account decoding. All three Wave-1 venue decoders — Orca **Whirlpool**, Raydium
+//! **CP-Swap (CPMM)**, and **PumpSwap** — plus their field offsets are **VERIFIED** (2026-06-23)
+//! against the canonical account structs AND real mainnet accounts (see each `decode_*` fn and
+//! the `decodes_real_*` tests, which run over frozen `getAccountInfo` fixtures in `fixtures/`).
+//! The verifiable primitives — SPL token-account `amount@64` read, sqrtPriceX64→price, Anchor
+//! discriminator check, fixed-width LE readers — are implemented and tested here.
 
 use arb_math::CpmmReserves;
 use solana_pubkey::Pubkey;
@@ -52,6 +52,12 @@ fn read_u16(d: &[u8], off: usize) -> Option<u16> {
 fn read_i32(d: &[u8], off: usize) -> Option<i32> {
     Some(i32::from_le_bytes(
         d.get(off..off.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+#[inline]
+fn read_u64(d: &[u8], off: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        d.get(off..off.checked_add(8)?)?.try_into().ok()?,
     ))
 }
 #[inline]
@@ -231,10 +237,101 @@ pub fn decode_raydium_amm_config_trade_fee_rate(data: &[u8]) -> Option<u64> {
     if !has_anchor_discriminator(data, &RAYDIUM_AMMCONFIG_DISCRIMINATOR) {
         return None;
     }
-    let off = raydium_cpmm_offsets::AMM_CONFIG_TRADE_FEE_RATE;
-    Some(u64::from_le_bytes(
-        data.get(off..off.checked_add(8)?)?.try_into().ok()?,
-    ))
+    read_u64(data, raydium_cpmm_offsets::AMM_CONFIG_TRADE_FEE_RATE)
+}
+
+// ---------------------------------------------------------------------------
+// PumpSwap AMM (Pump.fun's post-graduation AMM, Fase-2 venue). VERIFIED 2026-06-23 against a
+// real mainnet Pool (33cnyQ…) reached via a recent swap's ALT-resolved accounts: the SPL
+// token-accounts stored at `pool_base_token_account@139` / `pool_quote_token_account@171`
+// have `mint@0` equal to `base_mint@43` / `quote_mint@75` respectively — a mutual cross-check
+// that pins every offset. Like Raydium, reserves are the two pool token-accounts' `amount@64`;
+// the swap fee (lp + protocol [+ coin-creator] basis points, denom 10_000) lives in the
+// PumpSwap **GlobalConfig** singleton — wiring that read is Fase-2 (sizing-6), so the fee is a
+// parameter here.
+// ---------------------------------------------------------------------------
+
+/// PumpSwap `Pool` Anchor discriminator (`sha256("account:Pool")[..8]`), confirmed on-chain.
+pub const PUMPSWAP_POOL_DISCRIMINATOR: [u8; 8] = [241, 154, 109, 4, 17, 177, 109, 188];
+/// PumpSwap fee denominator (lp/protocol/creator fees are in basis points).
+pub const PUMPSWAP_FEE_DENOMINATOR: u64 = 10_000;
+
+/// PumpSwap `Pool` field offsets (from account start, incl. the 8-byte discriminator). VERIFIED.
+pub mod pumpswap_offsets {
+    /// `pool_bump: u8`.
+    pub const POOL_BUMP: usize = 8;
+    /// `index: u16`.
+    pub const INDEX: usize = 9;
+    /// `creator: Pubkey`.
+    pub const CREATOR: usize = 11;
+    /// `base_mint: Pubkey`.
+    pub const BASE_MINT: usize = 43;
+    /// `quote_mint: Pubkey`.
+    pub const QUOTE_MINT: usize = 75;
+    /// `lp_mint: Pubkey`.
+    pub const LP_MINT: usize = 107;
+    /// `pool_base_token_account: Pubkey` (its `amount@64` is the base reserve).
+    pub const POOL_BASE_TOKEN_ACCOUNT: usize = 139;
+    /// `pool_quote_token_account: Pubkey` (its `amount@64` is the quote reserve).
+    pub const POOL_QUOTE_TOKEN_ACCOUNT: usize = 171;
+    /// `lp_supply: u64`.
+    pub const LP_SUPPLY: usize = 203;
+    /// `coin_creator: Pubkey` (default/zero on pools with no creator fee).
+    pub const COIN_CREATOR: usize = 211;
+}
+
+/// Decoded PumpSwap `Pool` (the routing/assembly subset). Reserves come from the two pool
+/// token-accounts (`amount@64`); the fee comes from the GlobalConfig (Fase-2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PumpSwapPool {
+    pub pool_bump: u8,
+    pub index: u16,
+    pub creator: Pubkey,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub lp_mint: Pubkey,
+    pub pool_base_token_account: Pubkey,
+    pub pool_quote_token_account: Pubkey,
+    pub lp_supply: u64,
+    pub coin_creator: Pubkey,
+}
+
+impl PumpSwapPool {
+    /// Assemble [`CpmmReserves`] (`reserve_a` = base, `reserve_b` = quote) from the two pool
+    /// token-accounts' `amount@64` + the total swap fee in basis points (from GlobalConfig).
+    pub fn reserves(
+        &self,
+        base_token_account_data: &[u8],
+        quote_token_account_data: &[u8],
+        fee_basis_points: u64,
+    ) -> Option<CpmmReserves> {
+        cpmm_reserves_from_vaults(
+            base_token_account_data,
+            quote_token_account_data,
+            fee_basis_points,
+            PUMPSWAP_FEE_DENOMINATOR,
+        )
+    }
+}
+
+/// Decode a PumpSwap `Pool`. `None` on wrong/short discriminator or truncation.
+pub fn decode_pumpswap_pool(data: &[u8]) -> Option<PumpSwapPool> {
+    if !has_anchor_discriminator(data, &PUMPSWAP_POOL_DISCRIMINATOR) {
+        return None;
+    }
+    use pumpswap_offsets as o;
+    Some(PumpSwapPool {
+        pool_bump: *data.get(o::POOL_BUMP)?,
+        index: read_u16(data, o::INDEX)?,
+        creator: read_pubkey(data, o::CREATOR)?,
+        base_mint: read_pubkey(data, o::BASE_MINT)?,
+        quote_mint: read_pubkey(data, o::QUOTE_MINT)?,
+        lp_mint: read_pubkey(data, o::LP_MINT)?,
+        pool_base_token_account: read_pubkey(data, o::POOL_BASE_TOKEN_ACCOUNT)?,
+        pool_quote_token_account: read_pubkey(data, o::POOL_QUOTE_TOKEN_ACCOUNT)?,
+        lp_supply: read_u64(data, o::LP_SUPPLY)?,
+        coin_creator: read_pubkey(data, o::COIN_CREATOR)?,
+    })
 }
 
 #[cfg(test)]
@@ -381,5 +478,75 @@ mod tests {
         // Wrong disc => None on both decoders.
         assert!(decode_raydium_cpmm_pool(&[0u8; 637]).is_none());
         assert!(decode_raydium_amm_config_trade_fee_rate(&[0u8; 236]).is_none());
+    }
+
+    #[test]
+    fn decodes_real_pumpswap_pool() {
+        // Real mainnet PumpSwap Pool 33cnyQu2ycs5gJGBiupQf7c9CR5YKN3pBGhUZkstLvLj — a frozen
+        // getAccountInfo snapshot (2026-06-23), reached via a recent swap's ALT-resolved
+        // accounts. Offsets cross-verified LIVE: the SPL token-accounts at
+        // pool_base/quote_token_account hold exactly base_mint/quote_mint. detection-3's
+        // "validated against a cloned mainnet PumpSwap pool" gate.
+        let data = include_bytes!("fixtures/pumpswap_pool_33cnyQ.bin");
+        assert_eq!(&data[0..8], &PUMPSWAP_POOL_DISCRIMINATOR);
+        let p = decode_pumpswap_pool(data).expect("pumpswap pool decodes");
+        assert_eq!(
+            p.base_mint,
+            "So11111111111111111111111111111111111111112"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.quote_mint,
+            "DdeRv59v1Wm3VaVouBrxyWPt7UNWZmX3CxT8Q39X4oGm"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.lp_mint,
+            "A65KKKtNZS2sjp9ikigEwQYJLihJFwFR6GFiqXFbY1Fm"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.pool_base_token_account,
+            "ALMyPSjSoshY81Y9QB57nrfdHhkA4iyi1Bfr6cPG9vCJ"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.pool_quote_token_account,
+            "5XGDxSHLdnkPQ3iujzC6ZpjPB4dX74u7j52hXS5rhusX"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.creator,
+            "7j5GSvFgPcBtieWXrCPD57G2NQPzG1mLxHi5CFGnMRMg"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(p.pool_bump, 255);
+        assert_eq!(p.index, 0);
+        assert_eq!(p.lp_supply, 126_475_184_256_833);
+        assert_eq!(p.coin_creator, Pubkey::default()); // zero on this pool
+
+        // reserves() assembly using the pool's real on-chain balances (amount@64 of each pool
+        // token-account, cross-checked live) + a 25 bps fee (the GlobalConfig fee is Fase-2).
+        let mut base_ta = [0u8; 72];
+        base_ta[64..72].copy_from_slice(&2_915_097_037_223u64.to_le_bytes());
+        let mut quote_ta = [0u8; 72];
+        quote_ta[64..72].copy_from_slice(&7_577_603_925_249_937u64.to_le_bytes());
+        let r = p.reserves(&base_ta, &quote_ta, 25).unwrap();
+        assert_eq!(
+            (r.reserve_a, r.reserve_b),
+            (2_915_097_037_223, 7_577_603_925_249_937)
+        );
+        assert_eq!(
+            (r.fee_numerator, r.fee_denominator),
+            (25, PUMPSWAP_FEE_DENOMINATOR)
+        );
+
+        assert!(decode_pumpswap_pool(&[0u8; 301]).is_none());
     }
 }
