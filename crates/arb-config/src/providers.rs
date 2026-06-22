@@ -42,7 +42,20 @@ pub enum Commitment {
 /// Yellowstone gRPC endpoint. `token_env` names the env var holding the auth token.
 #[derive(Clone, Debug, Deserialize)]
 pub struct GrpcEndpoint {
+    /// Non-secret default/placeholder gRPC host. The REAL Chainstack Yellowstone host
+    /// (`<chain>-mainnet.core.chainstack.com:443`, port 443) is console-only (Node overview → gRPC
+    /// endpoint), so it is NEVER committed here — `url_env` names the env var that holds it and
+    /// overrides this at resolve time, mirroring [`DataSourceConfig::json_rpc_url_env`].
     pub url: Url,
+    /// Names the env var holding the full secret Chainstack Yellowstone gRPC endpoint. When set &
+    /// non-empty it overrides `url` (see [`GrpcEndpoint::resolve_url`]). Only the env-var *name*
+    /// lives in config, so the real per-node host never enters the committed TOML nor the
+    /// `Debug`-printable [`crate::loader::ArbConfig`] — mirroring [`DataSourceConfig::json_rpc_url_env`].
+    #[serde(default)]
+    pub url_env: Option<String>,
+    /// Names the env var holding the gRPC auth token. Chainstack gRPC auth is the **`x-token`
+    /// metadata header** (resolved at the client boundary), NOT a URL-embedded secret like the
+    /// JSON-RPC endpoint — so the token stays separate from `url`/`url_env`.
     pub token_env: String,
     #[serde(default)]
     pub commitment: Commitment,
@@ -51,6 +64,17 @@ pub struct GrpcEndpoint {
 }
 fn default_max_streams() -> u8 {
     2
+}
+
+impl GrpcEndpoint {
+    /// Effective gRPC endpoint: the secret host from the env var named by `url_env` if that var is
+    /// set & non-empty, else the non-secret `url` default. Call this at the gRPC-client boundary so
+    /// the real host is read from the environment on use and is never held in the logged config.
+    /// The auth token is resolved separately from `token_env` (Chainstack gRPC = `x-token` header).
+    pub fn resolve_url(&self) -> Url {
+        override_from(self.url_env.as_deref(), |n| std::env::var(n).ok())
+            .unwrap_or_else(|| self.url.clone())
+    }
 }
 
 /// Jito ShredStream proxy — free across all tiers (sub-slot tx-intent).
@@ -82,6 +106,16 @@ pub struct DataSourceConfig {
     /// Names the env var holding the full secret Chainstack WSS URL. Overrides `fallback_wss`.
     #[serde(default)]
     pub fallback_wss_url_env: Option<String>,
+    /// Names the env var holding the HTTP **Basic-Auth username** for a Chainstack node that uses
+    /// the username/password credential set instead of the key-in-path form (a node exposes BOTH;
+    /// `https://<bare-host>` + Basic Auth, or `https://nd-xxx.p2pify.com/<KEY>`). Resolved via
+    /// [`DataSourceConfig::resolve_basic_auth`] at the client boundary; the secret value lives in
+    /// the env, never here. `None` when the endpoint already carries its own credentials in the URL.
+    #[serde(default)]
+    pub basic_auth_user_env: Option<String>,
+    /// Names the env var holding the HTTP **Basic-Auth password** (pairs with `basic_auth_user_env`).
+    #[serde(default)]
+    pub basic_auth_pass_env: Option<String>,
     #[serde(default)]
     pub shredstream: Option<ShredStreamConfig>,
 }
@@ -103,6 +137,24 @@ impl DataSourceConfig {
             std::env::var(n).ok()
         })
         .or_else(|| self.fallback_wss.clone())
+    }
+
+    /// Effective Basic-Auth credentials `(username, password)` for a node that authenticates with
+    /// the username/password set rather than a key-in-path URL. Returns `Some` only when BOTH env
+    /// vars named by `basic_auth_user_env` / `basic_auth_pass_env` are declared and resolve to
+    /// non-empty values; otherwise `None` (the endpoint carries its own auth in the URL, or this is
+    /// the public default). The RPC/gRPC client applies these as an `Authorization: Basic` header
+    /// (preferred — avoids URL-encoding the secret); Surfpool's `--rpc-url` can instead embed them
+    /// as `https://user:pass@host`. Read at the client boundary so the secret never enters the
+    /// `Debug`-printable [`crate::loader::ArbConfig`].
+    pub fn resolve_basic_auth(&self) -> Option<(String, String)> {
+        let user = override_from(self.basic_auth_user_env.as_deref(), |n| {
+            std::env::var(n).ok()
+        })?;
+        let pass = override_from(self.basic_auth_pass_env.as_deref(), |n| {
+            std::env::var(n).ok()
+        })?;
+        Some((user, pass))
     }
 }
 
@@ -199,12 +251,69 @@ mod tests {
             json_rpc: "https://api.mainnet-beta.solana.com".into(),
             json_rpc_url_env: Some("ARBIT_TEST_UNSET_RPC_VAR_DO_NOT_DEFINE".into()),
             fallback_wss_url_env: Some("ARBIT_TEST_UNSET_WSS_VAR_DO_NOT_DEFINE".into()),
+            basic_auth_user_env: None,
+            basic_auth_pass_env: None,
             shredstream: None,
         };
         assert_eq!(c.resolve_json_rpc(), "https://api.mainnet-beta.solana.com");
         assert_eq!(
             c.resolve_fallback_wss().as_deref(),
             Some("wss://api.mainnet-beta.solana.com")
+        );
+        // No basic-auth env names declared ⇒ no credentials resolved (public default path).
+        assert_eq!(c.resolve_basic_auth(), None);
+    }
+
+    #[test]
+    fn resolve_basic_auth_needs_both_names_and_values() {
+        // Only the username name declared ⇒ None (a half-configured Basic-Auth pair must not
+        // silently authenticate with an empty password).
+        let mut c = DataSourceConfig {
+            active_tier: LadderTier::default(),
+            grpc: None,
+            fallback_wss: None,
+            json_rpc: "https://solana-mainnet.core.chainstack.com".into(),
+            json_rpc_url_env: None,
+            fallback_wss_url_env: None,
+            basic_auth_user_env: Some("ARBIT_TEST_UNSET_USER_DO_NOT_DEFINE".into()),
+            basic_auth_pass_env: None,
+            shredstream: None,
+        };
+        assert_eq!(c.resolve_basic_auth(), None);
+        // Both names declared but the env vars are unset in the test process ⇒ still None.
+        c.basic_auth_pass_env = Some("ARBIT_TEST_UNSET_PASS_DO_NOT_DEFINE".into());
+        assert_eq!(c.resolve_basic_auth(), None);
+    }
+
+    #[test]
+    fn grpc_resolve_url_falls_back_to_placeholder_when_env_unset() {
+        // A declared-but-unset url_env must yield the non-secret placeholder host, so the config
+        // still resolves a value pre-provisioning (the real host arrives via the env at runtime).
+        let g = GrpcEndpoint {
+            url: "https://yellowstone.chainstack.example:443".into(),
+            url_env: Some("ARBIT_TEST_UNSET_GRPC_VAR_DO_NOT_DEFINE".into()),
+            token_env: "CHAINSTACK_GRPC_TOKEN".into(),
+            commitment: Commitment::Processed,
+            max_streams: 2,
+        };
+        assert_eq!(
+            g.resolve_url(),
+            "https://yellowstone.chainstack.example:443"
+        );
+    }
+
+    #[test]
+    fn grpc_resolve_url_uses_placeholder_when_no_url_env_declared() {
+        let g = GrpcEndpoint {
+            url: "https://yellowstone.chainstack.example:443".into(),
+            url_env: None,
+            token_env: "CHAINSTACK_GRPC_TOKEN".into(),
+            commitment: Commitment::Processed,
+            max_streams: 2,
+        };
+        assert_eq!(
+            g.resolve_url(),
+            "https://yellowstone.chainstack.example:443"
         );
     }
 }

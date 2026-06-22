@@ -13,16 +13,26 @@ json_rpc = "https://api.mainnet-beta.solana.com"
 json_rpc_url_env = "CHAINSTACK_SOLANA_RPC_URL"      # overrides json_rpc when set & non-empty
 fallback_wss = "wss://api.mainnet-beta.solana.com"
 fallback_wss_url_env = "CHAINSTACK_SOLANA_WSS_URL"  # overrides fallback_wss when set & non-empty
+# Basic-Auth credential set for a node that authenticates by username/password instead of
+# key-in-path (the provisioned Global Node uses a bare host `https://solana-mainnet.core.chainstack.com`
+# + Basic Auth). Resolved via DataSourceConfig::resolve_basic_auth → the RPC/gRPC client applies an
+# `Authorization: Basic` header. Leave the *_RPC_URL above as a bare host (no key, no user:pass@) when
+# using these. Only env-var NAMES live here; the secrets stay in .env.
+basic_auth_user_env = "CHAINSTACK_USERNAME"
+basic_auth_pass_env = "CHAINSTACK_PASSWORD"
 
 [data_source.grpc]
 # Chainstack Yellowstone gRPC add-on (Growth+ plan; flat add-on, no per-MB metering; $49=2
-# streams / $149=7 / $449=25; up to 50 accounts/stream). gRPC auth is the x-token HEADER
-# (token_env), unlike JSON-RPC whose secret is in the URL above.
-# TODO(provision): replace the placeholder host with the real per-node endpoint from the
-# Chainstack console (Node overview -> gRPC endpoint). The add-on + IP allowlisting are
-# console-only steps the migration cannot automate.
-url = "https://yellowstone.chainstack.example:443"
-token_env = "CHAINSTACK_GRPC_TOKEN"     # token resolved from env, never stored in toml
+# streams / $149=7 / $449=25; up to 50 accounts/stream, all tiers — only the stream COUNT scales).
+# gRPC auth is the x-token METADATA HEADER (token_env), unlike JSON-RPC whose secret is in the URL.
+# The REAL per-node host (<chain>-mainnet.core.chainstack.com:443) is console-only (Node overview ->
+# gRPC endpoint) so it is resolved from `url_env` at runtime and NEVER stored here; `url` below is
+# only the non-secret placeholder/default. Resolver: GrpcEndpoint::resolve_url.
+# Operator (console-only, the migration cannot automate): install the add-on, IP-allowlist, and set
+# CHAINSTACK_GRPC_URL + CHAINSTACK_GRPC_TOKEN in .env.
+url = "https://yellowstone.chainstack.example:443"  # non-secret placeholder/default
+url_env = "CHAINSTACK_GRPC_URL"         # overrides url when set & non-empty (real host = console-only)
+token_env = "CHAINSTACK_GRPC_TOKEN"     # x-token metadata header; resolved from env, never in toml
 commitment = "processed"                # lowest latency; reverted-slot risk acceptable (atomic reverts)
 max_streams = 2                          # Chainstack $49 add-on = 2 streams (=> up to 100 accounts; >100 needs $149/7-stream tier)
 

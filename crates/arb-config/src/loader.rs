@@ -238,22 +238,47 @@ pub fn validate(cfg: &ArbConfig) -> Result<(), ConfigError> {
         }
     }
 
-    // 6. Active tier must have the endpoints it needs.
-    if cfg.data_source.active_tier.requires_grpc() && cfg.data_source.grpc.is_none() {
-        return Err(inv(format!(
-            "active tier {:?} requires a yellowstone grpc endpoint but none configured",
-            cfg.data_source.active_tier
-        )));
+    // 6. Active tier must have the endpoints it needs. A configured gRPC endpoint must also name a
+    //    non-empty `token_env`: Chainstack gRPC auth is the `x-token` metadata header resolved from
+    //    that env var (never URL-embedded), so a blank name = no auth at the client boundary.
+    match (
+        &cfg.data_source.grpc,
+        cfg.data_source.active_tier.requires_grpc(),
+    ) {
+        (None, true) => {
+            return Err(inv(format!(
+                "active tier {:?} requires a yellowstone grpc endpoint but none configured",
+                cfg.data_source.active_tier
+            )));
+        }
+        (Some(g), _) => {
+            if g.token_env.trim().is_empty() {
+                return Err(inv(
+                    "data_source.grpc.token_env is empty (gRPC x-token env-var name required)"
+                        .into(),
+                ));
+            }
+        }
+        (None, false) => {}
     }
 
-    // 7. If an env-var name is declared for the secret JSON-RPC/WSS URL, it must be a non-empty
-    //    name (the URL value itself lives in the env, never here). Catches a blank indirection.
+    // 7. If an env-var name is declared for a secret endpoint URL (JSON-RPC, WSS, or the gRPC host),
+    //    it must be a non-empty name (the URL value itself lives in the env, never here). Catches a
+    //    blank indirection that would silently fall back to the non-secret placeholder.
+    let grpc_url_env = cfg
+        .data_source
+        .grpc
+        .as_ref()
+        .and_then(|g| g.url_env.clone());
     for (field, name) in [
         ("json_rpc_url_env", &cfg.data_source.json_rpc_url_env),
         (
             "fallback_wss_url_env",
             &cfg.data_source.fallback_wss_url_env,
         ),
+        ("grpc.url_env", &grpc_url_env),
+        ("basic_auth_user_env", &cfg.data_source.basic_auth_user_env),
+        ("basic_auth_pass_env", &cfg.data_source.basic_auth_pass_env),
     ] {
         if let Some(n) = name {
             if n.trim().is_empty() {
@@ -320,6 +345,7 @@ mod tests {
                 active_tier: LadderTier::FirstProfit,
                 grpc: Some(GrpcEndpoint {
                     url: "https://grpc.example".into(),
+                    url_env: None,
                     token_env: "GRPC_TOKEN".into(),
                     commitment: Commitment::Processed,
                     max_streams: 2,
@@ -328,6 +354,8 @@ mod tests {
                 json_rpc: "https://rpc.example".into(),
                 json_rpc_url_env: None,
                 fallback_wss_url_env: None,
+                basic_auth_user_env: None,
+                basic_auth_pass_env: None,
                 shredstream: None,
             },
             landing: LandingConfig {
@@ -386,6 +414,28 @@ mod tests {
         c.data_source.active_tier = LadderTier::BuildProof;
         c.data_source.grpc = None;
         validate(&c).expect("build-proof tier needs no grpc");
+    }
+
+    #[test]
+    fn rejects_grpc_with_empty_token_env() {
+        // A configured gRPC endpoint with a blank token_env = no x-token auth at the client
+        // boundary; the gate must reject it rather than ship an unauthenticated stream.
+        let mut c = base_cfg();
+        if let Some(g) = c.data_source.grpc.as_mut() {
+            g.token_env = "   ".into();
+        }
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn rejects_grpc_with_blank_url_env_indirection() {
+        // Declaring grpc.url_env but leaving the *name* blank is a silent footgun (it would fall
+        // back to the placeholder host); step-7 must catch it.
+        let mut c = base_cfg();
+        if let Some(g) = c.data_source.grpc.as_mut() {
+            g.url_env = Some("   ".into());
+        }
+        assert!(validate(&c).is_err());
     }
 
     #[test]
