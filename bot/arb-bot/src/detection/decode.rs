@@ -140,6 +140,103 @@ pub fn decode_whirlpool(data: &[u8]) -> Option<WhirlpoolState> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Raydium CP-Swap (CPMM). VERIFIED 2026-06-23 against the canonical `PoolState`/`AmmConfig`
+// structs (raydium-io/raydium-cp-swap) AND a real mainnet pool: PoolState `token_1_mint@200`
+// decoded to WSOL and `AmmConfig.trade_fee_rate@12` = 2500 (= 0.25%, denom 1_000_000). Unlike
+// Whirlpool, the reserves are NOT in PoolState — they are the two vault token-account
+// `amount`s (offset 64), and the fee lives in the separate `AmmConfig` account.
+// ---------------------------------------------------------------------------
+
+/// Raydium CP-Swap `PoolState` Anchor discriminator (`sha256("account:PoolState")[..8]`),
+/// confirmed against a real mainnet pool.
+pub const RAYDIUM_CPMM_POOLSTATE_DISCRIMINATOR: [u8; 8] = [247, 237, 227, 245, 215, 195, 222, 70];
+/// Raydium CP-Swap `AmmConfig` Anchor discriminator (`sha256("account:AmmConfig")[..8]`).
+pub const RAYDIUM_AMMCONFIG_DISCRIMINATOR: [u8; 8] = [218, 244, 33, 104, 203, 203, 43, 111];
+/// Raydium CP-Swap fee denominator (`trade_fee_rate` is out of 1_000_000).
+pub const RAYDIUM_CPMM_FEE_DENOMINATOR: u64 = 1_000_000;
+
+/// `PoolState` field offsets (from account start, incl. the 8-byte discriminator). VERIFIED.
+pub mod raydium_cpmm_offsets {
+    /// `amm_config: Pubkey` (holds the fee).
+    pub const AMM_CONFIG: usize = 8;
+    /// `token_0_vault: Pubkey`.
+    pub const TOKEN_0_VAULT: usize = 72;
+    /// `token_1_vault: Pubkey`.
+    pub const TOKEN_1_VAULT: usize = 104;
+    /// `token_0_mint: Pubkey`.
+    pub const TOKEN_0_MINT: usize = 168;
+    /// `token_1_mint: Pubkey`.
+    pub const TOKEN_1_MINT: usize = 200;
+    /// `mint_0_decimals: u8`.
+    pub const MINT_0_DECIMALS: usize = 331;
+    /// `mint_1_decimals: u8`.
+    pub const MINT_1_DECIMALS: usize = 332;
+    /// `AmmConfig.trade_fee_rate: u64` (after bump@8 + disable_create@9 + index@10..12).
+    pub const AMM_CONFIG_TRADE_FEE_RATE: usize = 12;
+}
+
+/// Decoded Raydium CP-Swap `PoolState` (the routing/assembly subset). Reserves come from the
+/// vault balances; the fee comes from [`decode_raydium_amm_config_trade_fee_rate`] over the
+/// `amm_config` account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RaydiumCpmmPool {
+    pub amm_config: Pubkey,
+    pub token_0_vault: Pubkey,
+    pub token_1_vault: Pubkey,
+    pub token_0_mint: Pubkey,
+    pub token_1_mint: Pubkey,
+    pub mint_0_decimals: u8,
+    pub mint_1_decimals: u8,
+}
+
+impl RaydiumCpmmPool {
+    /// Assemble [`CpmmReserves`] from the two vault token-accounts (`amount@64`) + the pool's
+    /// `trade_fee_rate` (from its `amm_config`). `reserve_a` is token_0, `reserve_b` is token_1.
+    pub fn reserves(
+        &self,
+        vault_0_data: &[u8],
+        vault_1_data: &[u8],
+        trade_fee_rate: u64,
+    ) -> Option<CpmmReserves> {
+        cpmm_reserves_from_vaults(
+            vault_0_data,
+            vault_1_data,
+            trade_fee_rate,
+            RAYDIUM_CPMM_FEE_DENOMINATOR,
+        )
+    }
+}
+
+/// Decode a Raydium CP-Swap `PoolState`. `None` on wrong/short discriminator or truncation.
+pub fn decode_raydium_cpmm_pool(data: &[u8]) -> Option<RaydiumCpmmPool> {
+    if !has_anchor_discriminator(data, &RAYDIUM_CPMM_POOLSTATE_DISCRIMINATOR) {
+        return None;
+    }
+    use raydium_cpmm_offsets as o;
+    Some(RaydiumCpmmPool {
+        amm_config: read_pubkey(data, o::AMM_CONFIG)?,
+        token_0_vault: read_pubkey(data, o::TOKEN_0_VAULT)?,
+        token_1_vault: read_pubkey(data, o::TOKEN_1_VAULT)?,
+        token_0_mint: read_pubkey(data, o::TOKEN_0_MINT)?,
+        token_1_mint: read_pubkey(data, o::TOKEN_1_MINT)?,
+        mint_0_decimals: *data.get(o::MINT_0_DECIMALS)?,
+        mint_1_decimals: *data.get(o::MINT_1_DECIMALS)?,
+    })
+}
+
+/// Read `trade_fee_rate` (out of [`RAYDIUM_CPMM_FEE_DENOMINATOR`]) from a Raydium CP-Swap
+/// `AmmConfig` account. `None` on wrong/short discriminator or truncation.
+pub fn decode_raydium_amm_config_trade_fee_rate(data: &[u8]) -> Option<u64> {
+    if !has_anchor_discriminator(data, &RAYDIUM_AMMCONFIG_DISCRIMINATOR) {
+        return None;
+    }
+    let off = raydium_cpmm_offsets::AMM_CONFIG_TRADE_FEE_RATE;
+    Some(u64::from_le_bytes(
+        data.get(off..off.checked_add(8)?)?.try_into().ok()?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +328,58 @@ mod tests {
 
         // Wrong/zero discriminator => None, never a panic.
         assert!(decode_whirlpool(&[0u8; 653]).is_none());
+    }
+
+    #[test]
+    fn decodes_real_raydium_cpmm_pool() {
+        // Real mainnet CP-Swap pool 7e6L4dknXXVjHmnqDFmnGV8c4y9fePccsvjZEgaAPYiU (token/WSOL)
+        // + its AmmConfig D4FPEr…, frozen getAccountInfo snapshots (2026-06-23). The
+        // detection-3 "validated against real cloned account bytes" gate for Raydium CPMM.
+        let pool = include_bytes!("fixtures/raydium_cpmm_pool_7e6L4d.bin");
+        assert_eq!(&pool[0..8], &RAYDIUM_CPMM_POOLSTATE_DISCRIMINATOR);
+        let p = decode_raydium_cpmm_pool(pool).expect("cpmm pool decodes");
+        assert_eq!(
+            p.token_1_mint,
+            "So11111111111111111111111111111111111111112"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.token_0_mint,
+            "LUC6TxSNr1yodP8jbox4fpVoEwRhV9ZkczZV4uZ6yce"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.amm_config,
+            "D4FPEruKEHrG5TenZ2mpDGEfu1iUvTiqBxvpU8HLBvC2"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.token_0_vault,
+            "57B4hPwTmnqjMYtpazDNizciRJb4B7kU8c28sbVu4jTq"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(
+            p.token_1_vault,
+            "4mpr2XXc5ay4UJJ7fheGDn29k5tqTQn5Zp6d6k6pZBNo"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(p.mint_0_decimals, 9);
+        assert_eq!(p.mint_1_decimals, 9);
+
+        // AmmConfig carries the swap fee: trade_fee_rate = 2500 / 1_000_000 = 0.25%.
+        let cfg = include_bytes!("fixtures/raydium_cpmm_ammconfig_D4FPEr.bin");
+        assert_eq!(&cfg[0..8], &RAYDIUM_AMMCONFIG_DISCRIMINATOR);
+        let fee = decode_raydium_amm_config_trade_fee_rate(cfg).expect("fee decodes");
+        assert_eq!(fee, 2500);
+        assert_eq!(RAYDIUM_CPMM_FEE_DENOMINATOR, 1_000_000);
+
+        // Wrong disc => None on both decoders.
+        assert!(decode_raydium_cpmm_pool(&[0u8; 637]).is_none());
+        assert!(decode_raydium_amm_config_trade_fee_rate(&[0u8; 236]).is_none());
     }
 }
