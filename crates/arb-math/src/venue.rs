@@ -1,8 +1,10 @@
 //! Per-venue quoting. Raydium CPMM and PumpSwap AMM are pure constant-product and share
 //! the exact integer path in [`crate::cpmm`]. Orca Whirlpool is constant-product only
-//! within a tick range; its bit-exact sqrtPriceX64 mirror is a Fase-1 task validated by
-//! the on-chain CPI differential — until then `OrcaWhirlpool` quotes via the CP
-//! approximation and is flagged `approximate()` so callers never treat it as gate-exact.
+//! within a tick range; the bit-exact sqrtPriceX64 mirror now lives in
+//! [`crate::whirlpool`] ([`crate::whirlpool::WhirlpoolPool::quote_exact_in`], `sizing-5`).
+//! The [`CpmmVenue`] wrapper here still carries an Orca CP **approximation** for the advisory
+//! detection/graph price view, flagged `approximate()` so callers never treat *that* path as
+//! gate-exact — the gate path is `whirlpool`.
 
 use crate::cpmm::CpmmReserves;
 use arb_types::{DexKind, SwapDir};
