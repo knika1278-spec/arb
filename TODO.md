@@ -112,7 +112,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 
 ### detection
 - [x] `detection-2` Core model + SessionStamp dedupe types *(detection · 1d · detection-1)*
-- [ ] 🟡 `detection-3` Per-venue decoders (CPMM vaults+PoolState, Whirlpool, PumpSwap) *(detection · 4d · detection-2)* — decode.rs done; **field offsets TODO-verify against IDL**
+- [x] `detection-3` Per-venue decoders (CPMM vaults+PoolState, Whirlpool, PumpSwap) *(detection · 4d · detection-2)* — **offsets VERIFIED + decoders implemented (2026-06-23)**. `decode.rs`: full `RaydiumCpmmPool`/`AmmConfig`-fee, `Whirlpool`, `PumpSwapPool`/`GlobalConfig`-fee decoders w/ named offset consts + account discriminators (`sha256("account:<Name>")`) + fee denominators (CPMM 1e6, Whirlpool 1e6, PumpSwap 1e4=lp20+proto5+cc5). Every offset triple-verified (struct byte-arithmetic + adversarial re-derivation + live `getAccountInfo`) and **locked by 5 real-mainnet-byte fixtures** (Chainstack RPC). Fail-closed on bad disc/short buffer. Wiring to a live stream still rides detection-5 (real gRPC, 🔒) / detection-9 (PumpSwap subscription).
 - [x] `detection-4` Idempotent pool-state cache + CPMM multi-component assembly *(detection · 3d · detection-3)*
 - [ ] 🟡 `detection-5` Yellowstone gRPC ingest client *(detection · 2.5d · detection-2)* — seam (AccountUpdateSource + MockSource) done; 🔒 real client deferred (heavy crate)
 - [x] `detection-6` Token-pair graph + incremental edge recompute *(detection · 2d · detection-4)*
