@@ -22,6 +22,7 @@ pub mod rounding;
 pub mod search;
 pub mod u256;
 pub mod venue;
+pub mod whirlpool;
 
 // Curated public surface.
 pub use cpmm::{opportunity_exists, quote_out, required_in, CpmmReserves, RoundTrip};
@@ -32,6 +33,7 @@ pub use rounding::RoundDirection;
 pub use search::optimal_delta_search;
 pub use u256::U256;
 pub use venue::{dyn_round_trip_net_out, CpmmVenue, QuoteError, QuoteIn, QuoteOut, Quoter};
+pub use whirlpool::{WhirlpoolError, WhirlpoolPool, WhirlpoolQuote};
 
 #[cfg(feature = "std")]
 pub use optimal::optimal_delta_general;

@@ -1,8 +1,9 @@
 //! Per-venue quoting (sizing-3): the day-1 [`Quoter`] abstraction over arb-math's bit-exact swap
 //! math. Raydium CPMM and PumpSwap AMM are pure constant-product and share the exact integer path
-//! in [`crate::cpmm`]. Orca Whirlpool is constant-product only within a tick range; until its
-//! bit-exact sqrtPriceX64 mirror lands (sizing-5) it quotes via the CP approximation and reports
-//! `approximate() == true` so callers never treat it as gate-exact.
+//! in [`crate::cpmm`]. Orca Whirlpool is constant-product only within a tick range; its bit-exact
+//! sqrtPriceX64 mirror now lives in [`crate::whirlpool`] (sizing-5). The [`CpmmVenue`] Orca path
+//! here stays a CP **approximation** (flagged `approximate() == true`) for the advisory
+//! detection/graph price view only — the gate path is `whirlpool`.
 //!
 //! [`QuoteOut`] carries BOTH the pool-facing GROSS amounts and the trader's actual balance-delta
 //! NET amounts (after Token-2022 transfer fees on each side). Profit MUST be checked on the net
