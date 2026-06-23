@@ -262,6 +262,25 @@ pub fn validate(cfg: &ArbConfig) -> Result<(), ConfigError> {
         }
     }
 
+    // 8. landing-1: the Jito auth indirection + the pinned landing endpoints must be present. The
+    //    UUID *value* lives in the env named by `auth_uuid_env` (never here), but a BLANK
+    //    indirection would silently drop the x-jito-auth header — reject it at load. The Block
+    //    Engine + Helius Sender URLs are non-secret and must be pinned, not empty.
+    if cfg.landing.jito.auth_uuid_env.trim().is_empty() {
+        return Err(inv(
+            "landing.jito.auth_uuid_env is empty (names the env var holding the x-jito-auth UUID)"
+                .into(),
+        ));
+    }
+    for (field, url) in [
+        ("jito.block_engine_url", &cfg.landing.jito.block_engine_url),
+        ("helius_sender.url", &cfg.landing.helius_sender.url),
+    ] {
+        if url.trim().is_empty() {
+            return Err(inv(format!("landing.{field} must be a non-empty endpoint")));
+        }
+    }
+
     Ok(())
 }
 
@@ -392,6 +411,21 @@ mod tests {
     fn rejects_wave1_id_mismatch() {
         let mut c = base_cfg();
         c.program_ids.wave1[0].id = pid::ORCA_WHIRLPOOL.to_string(); // wrong id for the name
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn rejects_blank_jito_auth_uuid_env() {
+        // landing-1: a blank indirection would silently drop the x-jito-auth header.
+        let mut c = base_cfg();
+        c.landing.jito.auth_uuid_env = "  ".into();
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_landing_endpoint() {
+        let mut c = base_cfg();
+        c.landing.helius_sender.url = String::new();
         assert!(validate(&c).is_err());
     }
 }

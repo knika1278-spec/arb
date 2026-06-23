@@ -115,6 +115,11 @@ fn override_from(var_name: Option<&str>, lookup: impl Fn(&str) -> Option<String>
         .filter(|v| !v.is_empty())
 }
 
+/// The HTTP header the Jito Block Engine reads for the per-account allowlisted UUID rate-limit
+/// (landing-1). The UUID *value* never lives in committed config — it is resolved from the env
+/// var named by [`JitoConfig::auth_uuid_env`] at use, mirroring the URL-embedded RPC secret.
+pub const JITO_AUTH_HEADER: &str = "x-jito-auth";
+
 /// Jito Block-Engine landing config. `tip_inside_tx` is a hard invariant (validated true).
 #[derive(Clone, Debug, Deserialize)]
 pub struct JitoConfig {
@@ -132,6 +137,29 @@ fn default_true() -> bool {
 }
 fn default_tip_cap_bps() -> u32 {
     5_000 // 50% ceiling per plan.md §9/§10
+}
+
+impl JitoConfig {
+    /// Resolve the allowlisted Jito UUID from the env var named by `auth_uuid_env`. Returns `None`
+    /// when the var is unset/blank (operator has not provisioned the account yet), in which case
+    /// the executor falls back to the un-authenticated public rate-limit. Read at the request
+    /// boundary so the secret stays out of the `Debug`-printable [`crate::loader::ArbConfig`],
+    /// exactly as [`DataSourceConfig::resolve_json_rpc`] keeps the RPC key out.
+    pub fn resolve_auth_uuid(&self) -> Option<String> {
+        override_from(Some(self.auth_uuid_env.as_str()), |n| std::env::var(n).ok())
+    }
+
+    /// The `(x-jito-auth, <uuid>)` header pair for the Block Engine JSON-RPC client, or `None`
+    /// when no UUID is provisioned. The client attaches it to every `sendBundle`/`getTipAccounts`.
+    pub fn auth_header(&self) -> Option<(&'static str, String)> {
+        auth_header_pair(self.resolve_auth_uuid())
+    }
+}
+
+/// Pure header-formatting step, split out so it is unit-testable without touching the process
+/// environment (the env read lives in [`JitoConfig::resolve_auth_uuid`]).
+fn auth_header_pair(uuid: Option<String>) -> Option<(&'static str, String)> {
+    uuid.map(|u| (JITO_AUTH_HEADER, u))
 }
 
 /// Helius Sender fallback (dual-route SWQoS + Jito, 0 credits).
@@ -206,5 +234,21 @@ mod tests {
             c.resolve_fallback_wss().as_deref(),
             Some("wss://api.mainnet-beta.solana.com")
         );
+    }
+
+    #[test]
+    fn auth_header_pair_uses_x_jito_auth_when_uuid_present() {
+        let got = auth_header_pair(Some("3f1c…allowlisted-uuid".into()));
+        assert_eq!(
+            got,
+            Some((JITO_AUTH_HEADER, "3f1c…allowlisted-uuid".to_string()))
+        );
+        assert_eq!(JITO_AUTH_HEADER, "x-jito-auth");
+    }
+
+    #[test]
+    fn auth_header_pair_is_none_without_uuid() {
+        // No provisioned UUID => no header (executor runs on the public rate-limit until provisioned).
+        assert_eq!(auth_header_pair(None), None);
     }
 }

@@ -68,6 +68,13 @@ impl TipOracle {
         }
     }
 
+    /// Build over a validated, runtime-resolved tip-account set (landing-1). This is the sanctioned
+    /// production path: the 8 accounts come from `getTipAccounts` via a
+    /// [`super::setup::TipAccountSource`], never a hardcoded constant.
+    pub fn from_account_set(params: TipParams, accounts: &super::setup::TipAccountSet) -> Self {
+        Self::new(params, accounts.to_vec())
+    }
+
     /// Push a fresh tip-floor (from REST poll or the WS stream).
     pub fn update_floor(&mut self, snapshot: TipFloorSnapshot) {
         self.snapshot = Some(snapshot);

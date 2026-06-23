@@ -13,6 +13,7 @@ pub mod config;
 pub mod facade;
 pub mod landing_loop;
 pub mod registry;
+pub mod setup;
 pub mod tip;
 pub mod types;
 
@@ -20,6 +21,10 @@ pub use config::{ConfigError, ExecutorConfig};
 pub use facade::{land, LandDeps, LandError, LandRequest, SignerHandle};
 pub use landing_loop::{run_landing_loop, AttemptResult, BlockhashSource, LandingTransport};
 pub use registry::{InflightGuard, WritableAccountRegistry};
+pub use setup::{
+    AuthError, EndpointProbe, JitoAuth, SenderEndpoint, TipAccountError, TipAccountSet,
+    TipAccountSource, TIP_ACCOUNT_COUNT,
+};
 pub use tip::{TipOracle, TipParams, MIN_TIP_LAMPORTS};
 pub use types::{
     ArbTxSpec, Blockhash, BundleId, DropCause, InflightStatus, LandingOutcome, Region, Route,

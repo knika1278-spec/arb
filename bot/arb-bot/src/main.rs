@@ -34,19 +34,37 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // landing-1: resolve the Jito allowlisted UUID from the env (never logged) and report only
+    // whether the x-jito-auth header is provisioned. A malformed provisioned value is fatal.
+    let jito_auth = match arb_bot::executor::setup::JitoAuth::from_jito_config(&cfg.landing.jito) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!(%e, "JITO_AUTH_UUID is set but malformed");
+            return ExitCode::FAILURE;
+        }
+    };
+    let sender = arb_bot::executor::setup::SenderEndpoint::from_config(&cfg.landing.helius_sender);
+
     tracing::info!(
         cluster = ?cfg.cluster,
         tier = ?cfg.data_source.active_tier,
         tip_inside_tx = cfg.landing.jito.tip_inside_tx,
+        jito_auth_provisioned = jito_auth.is_some(),
+        sender_enabled = sender.enabled,
         "arb-bot scaffold up; wave-1 allowlist has {} venues",
         arb_config::WAVE1_DEX_ALLOWLIST.len()
     );
     println!(
-        "arb-bot OK — cluster={:?} tier={:?} landing=jito:{} sender:{}",
+        "arb-bot OK — cluster={:?} tier={:?} landing=jito:{} (x-jito-auth: {}) sender:{}",
         cfg.cluster,
         cfg.data_source.active_tier,
         cfg.landing.jito.block_engine_url,
-        cfg.landing.helius_sender.url
+        if jito_auth.is_some() {
+            "provisioned"
+        } else {
+            "unset (public rate-limit)"
+        },
+        sender.url
     );
     ExitCode::SUCCESS
 }

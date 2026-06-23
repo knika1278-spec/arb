@@ -79,7 +79,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 - [x] `txbuilder-2` ComputeBudget instruction builder + measured-CU sizing *(txbuilder · 1d · txbuilder-1)*
 - [x] `signer-1` Key security baseline + supply-chain hygiene gate *(signer · 2d · scaffold-1,9)*
 - [x] `signer-2` SolanaSigner trait + MemorySigner hot-key backend *(signer · 2d · signer-1, scaffold-5)* — keychain.rs: trait + MemorySigner (solana-keypair/signer/signature, openssl-free) + only-Memory-hot-path assert
-- [ ] `landing-1` Jito account, UUID and Sender baseline (Fase 0 setup seam) *(landing · 2d · scaffold-1)* — operator account provisioning + code seam
+- [ ] 🟡 `landing-1` Jito account, UUID and Sender baseline (Fase 0 setup seam) *(landing · 2d · scaffold-1)* — **code seam DONE**: `JitoConfig::resolve_auth_uuid`+`x-jito-auth` header (arb-config), `validate` rejects blank auth_uuid_env/landing endpoints, executor `setup.rs` (`TipAccountSource` 8-acct **runtime** seam + `TipAccountSet` validation `from_resolved` exactly-8/distinct/non-default, `JitoAuth`, `SenderEndpoint`+`EndpointProbe` reachability seam), wired in `main.rs` (resolves UUID from env, never logged). 🔒 operator must provision Jito allowlisted UUID → `JITO_AUTH_UUID` + register Helius Sender; real `getTipAccounts` RPC resolution + reachability HTTP land in landing-2/-7
 - [x] `testing-1` Fase 0: toolchain + LiteSVM bootstrap + skeleton build *(testing · 2d · onchain-1, scaffold-11)*
 
 ---
