@@ -234,22 +234,30 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 > Conflicts with the standing "follow-TODO-strictly / no self-invented scope" directive — recorded here only
 > because the user opted in explicitly. Revisit at the Fase-2 go/no-go before committing capital.
 
+> **2026-06-23 — Fase 2.5 off-chain core landed.** Foundation (DexKind tags 3/4/5 + gated
+> `FASE25_DEX_ALLOWLIST` + program IDs), all three bit-exact quoters, the decoders, the N-leg
+> processor, the triangle sizer/cycle-finder, and the 3-leg builder are DONE + host-tested (arb-math
+> 74, arb-bot 193, arb-program 15; clippy `-D warnings` + fmt clean). On-chain CPI differential
+> (`M1-GATE-EXT`/`testing-11`) stays 🔒 (build-sbf + Surfpool). Venue math came from the
+> `fase25-venue-research` workflow: every offset/discriminator/rounding cross-checked vs canonical
+> source + IDL + live Chainstack `getAccountInfo`, adversarially second-sourced.
+
 ### venues — decodable adapters + bit-exact quoters (each gated by M1-GATE-EXT)
-- [ ] ★ `onchain-17` Meteora DLMM swap adapter (constant-sum bins, bin-array accounts) *(onchain · 4d · onchain-3,4,5)*
-- [ ] ★ `onchain-18` Meteora DAMM v2 / CP-AMM swap adapter (Token-2022 fee path) *(onchain · 3d · onchain-3,4,5)*
-- [ ] ★ `onchain-19` Raydium CLMM swap adapter (sqrtPriceX64 Q64.64, tick arrays; reuses add-6 resolver pattern) *(onchain · 3d · onchain-3,4,5)*
-- [ ] `sizing-12` Meteora DLMM quoter (bit-exact, active-bin walk + cross) *(sizing · 3d · sizing-3)*
-- [ ] `sizing-13` Meteora DAMM v2 quoter (bit-exact, constant-product) *(sizing · 1.5d · sizing-3)*
-- [ ] `sizing-14` Raydium CLMM quoter (bit-exact, in-range tick linearization) *(sizing · 2.5d · sizing-3, add-6)*
-- [ ] `detection-11` Decoders + cache wiring for DLMM / DAMM v2 / Raydium CLMM (field offsets vs IDL) *(detection · 3d · detection-3)*
-- [ ] ★ `M1-GATE-EXT` **GATE**: per-venue both-dir differential GREEN for the 3 new venues (extends M1-GATE; LiteSVM + Surfpool) *(testing · 4d · onchain-17,18,19, sizing-12,13,14)*
+- [ ] 🟡 ★ `onchain-17` Meteora DLMM swap adapter (constant-sum bins, bin-array accounts) *(onchain · 4d · onchain-3,4,5)* — `adapters/meteora_dlmm.rs`: `swap` disc `[248,198,158,145,225,117,135,200]` (verified) + generic `[amount_in,min_out]` encode, wired into `encode_swap_data`. 🔒 on-chain trust-allowlist enablement (kept Wave-1-strict) + M1-GATE-EXT differential (build-sbf)
+- [ ] 🟡 ★ `onchain-18` Meteora DAMM v2 / CP-AMM swap adapter (Token-2022 fee path) *(onchain · 3d · onchain-3,4,5)* — `adapters/meteora_damm_v2.rs`: `swap` disc `[248,…]` (verified) + generic encode; 🔒 differential
+- [ ] 🟡 ★ `onchain-19` Raydium CLMM swap adapter (sqrtPriceX64 Q64.64, tick arrays) *(onchain · 3d · onchain-3,4,5)* — `adapters/raydium_clmm.rs`: `swap_v2` disc `[43,4,237,11,26,201,30,98]` (verified) + custom `[amount,threshold,sqrt_price_limit u128=0,is_base_input=1]` encode (research CONFIRMED the `0`→bound substitution); 🔒 differential
+- [x] `sizing-12` Meteora DLMM quoter (bit-exact, active-bin) *(sizing · 3d · sizing-3)* — `arb-math/dlmm.rs`: single-active-bin constant-sum (`get_amount_out/in`, U256), `get_price_from_id` Q64.64 pow, base+variable(volatility) fee helpers, `CrossesBin` at the boundary (multi-bin = Fase 3). Variable fee is execution-clock dependent → fully quote-stable only when `variable_fee_control==0`. 8 tests
+- [x] `sizing-13` Meteora DAMM v2 quoter (bit-exact) *(sizing · 1.5d · sizing-3)* — **NOT constant-product** (research correction): `arb-math/damm_v2.rs` single-full-range concentrated-liquidity sqrt-price (A→B next-P ceil + Δb floor `>>128`; B→A next-P floor + Δa floor), fee CEIL per `(collect_fee_mode,dir)`, `PriceRangeViolation` declines (no clamp) out of band. 8 tests
+- [x] `sizing-14` Raydium CLMM quoter (bit-exact, in-range) *(sizing · 2.5d · sizing-3, add-6)* — `arb-math/raydium_clmm.rs`: DEPLOYED-legacy `compute_swap_step` (fee-on-input FLOOR, `get_delta_amount_0` **double-rounding**, legacy `MAX_SQRT_PRICE_X64`=79226673521066979257578248091 ≠ Orca), single in-range step + `CrossesTick`. 8 tests
+- [ ] 🟡 `detection-11` Decoders + cache wiring for DLMM / DAMM v2 / Raydium CLMM (field offsets vs IDL) *(detection · 3d · detection-3)* — **decoders DONE+verified** (`detection/decode.rs`: `DlmmLbPair`/`DammV2Pool`/`RaydiumClmmPool`+`AmmConfig`, offsets/disc/LEN from research, +8 LbPair correction applied, **collision guards** CLMM `PoolState`≡CPMM & DAMM `Pool`≡PumpSwap via owner+exact-LEN; 3 offset-locking tests). Cache-wiring into the CP-only `PriceView` deferred (DLMM/CLMM/DAMM need a non-CP price repr; venues are M1-GATE-EXT-gated, not live yet)
+- [ ] 🔒 ★ `M1-GATE-EXT` **GATE**: per-venue both-dir differential GREEN for the 3 new venues (extends M1-GATE; LiteSVM + Surfpool) *(testing · 4d · onchain-17,18,19, sizing-12,13,14)* — off-chain quoters/decoders/adapters all ready; blocked on build-sbf + Surfpool/LiteSVM real-venue `.so` for the predicted==realized CPI differential
 
 ### triangle — 3-leg execution (changes core program + math shape)
-- [ ] ★ `onchain-20` N-leg processor: snapshot → CPI A → CPI B → CPI C → terminal assert (generalize 2-leg `onchain-8`) *(onchain · 4d · onchain-8)*
-- [ ] `sizing-15` Triangle per-leg re-size on the Bellman-Ford cycle (promotes `sizing-10` seam to active) *(sizing · 3d · sizing-10)*
-- [ ] `detection-12` Negative-cycle discovery wired to the live pair graph (promotes detection seam) *(detection · 2.5d · detection-6, sizing-15)*
-- [ ] `txbuilder-15` 3-leg route layout + account budget (locks<128, bytes≤1232 across 3 venues) *(txbuilder · 2.5d · txbuilder-5)*
-- [ ] ★ `testing-11` Triangle differential + revert-on-unprofitable proof (LiteSVM + Surfpool) *(testing · 4d · onchain-20, M1-GATE-EXT)*
+- [x] ★ `onchain-20` N-leg processor: snapshot → CPI A → CPI B → CPI C → terminal assert (generalize 2-leg `onchain-8`) *(onchain · 4d · onchain-8)* — new tag `TAG_TRY_ARBITRAGE_N=1` (proven 2-leg tag 0 untouched) + `TryArbitrageNData` (leg_count + N legs, `MIN_LEGS..=MAX_LEGS=4`) + `process_n_leg` cycle loop (N ATAs, measured-delta chaining, terminal base assert). 4 tests
+- [x] `sizing-15` Triangle per-leg re-size on the cycle (promotes `sizing-10` seam to active) *(sizing · 3d · sizing-10)* — `arb-math/cycle.rs`: generic N-leg `CycleLeg`/`cycle_net_out`/`size_cycle` (exact-integer ternary search, heterogeneous via the `Quoter` trait) — the N-leg analogue of `RoundTrip`+`optimal_delta_search`. 4 tests
+- [x] `detection-12` Negative-cycle discovery wired to the live pair graph (promotes detection seam) *(detection · 2.5d · detection-6, sizing-15)* — `detection/cycle.rs`: Bellman-Ford in log-price space over the mint graph (per-pool ±edges, `-ln(spot·(1−fee))`), cycle reconstruction bounded by `max_len`; wired to the live cache via `PoolStateCache::views()` + `DetectionPipeline::find_arbitrage_cycle`. 4 tests
+- [x] `txbuilder-15` 3-leg route layout + account budget (locks<128, bytes≤1232 across 3 venues) *(txbuilder · 2.5d · txbuilder-5)* — `txbuilder/layout.rs::build_arb_n_instruction` (N-leg framing via `TryArbitrageNData::pack`, authority+N-ATAs+legs) + up-front unique-account-lock budget guard (`TooManyAccountLocks`); byte/CU gate stays the assembly-time `LimitReport`. 3 tests
+- [ ] 🔒 ★ `testing-11` Triangle differential + revert-on-unprofitable proof (LiteSVM + Surfpool) *(testing · 4d · onchain-20, M1-GATE-EXT)* — off-chain pieces ready (cycle sizer + N-leg processor + 3-leg builder); blocked on build-sbf + Surfpool for the real-venue differential
 
 ---
 

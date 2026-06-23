@@ -62,14 +62,25 @@ impl ArbError {
     }
 }
 
-/// Venue discriminant shared across detection / sizing / tx-builder. Wave-1 only;
-/// deferred venues are added when their adapters land (Fase 3).
+/// Venue discriminant shared across detection / sizing / tx-builder.
+///
+/// Tags 0–2 are the **Wave-1** venues (mainnet-eligible once their M1-GATE differential is
+/// green). Tags 3–5 are the **Fase-2.5** scope expansion (Meteora DLMM, Meteora DAMM v2,
+/// Raydium CLMM): they are gated by `M1-GATE-EXT` and not mainnet-eligible until their own
+/// per-venue both-direction differential is green. Never renumber an existing tag — only append.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DexKind {
     RaydiumCpmm = 0,
     OrcaWhirlpool = 1,
     PumpSwapAmm = 2,
+    // ---- Fase 2.5 (gated by M1-GATE-EXT) ----
+    /// Meteora DLMM (discretized constant-sum bins; bin-array accounts).
+    MeteoraDlmm = 3,
+    /// Meteora DAMM v2 / CP-AMM (constant-product, Token-2022 fee path).
+    MeteoraDammV2 = 4,
+    /// Raydium CLMM (sqrtPriceX64 concentrated liquidity; tick arrays).
+    RaydiumClmm = 5,
 }
 
 impl DexKind {
@@ -84,16 +95,31 @@ impl DexKind {
             0 => Some(Self::RaydiumCpmm),
             1 => Some(Self::OrcaWhirlpool),
             2 => Some(Self::PumpSwapAmm),
+            3 => Some(Self::MeteoraDlmm),
+            4 => Some(Self::MeteoraDammV2),
+            5 => Some(Self::RaydiumClmm),
             _ => None,
         }
     }
 
-    /// All three constant-product venues are pure `x*y=k` for Milestone 1.
+    /// Pure `x*y=k` constant-product venues: the off-chain quoter is the [`crate`]-shared
+    /// CPMM integer path. Concentrated-liquidity (Whirlpool, Raydium CLMM) and constant-sum
+    /// (DLMM) venues are NOT constant-product and carry their own bit-exact quoter.
     #[inline]
     pub const fn is_constant_product(self) -> bool {
         matches!(
             self,
-            Self::RaydiumCpmm | Self::OrcaWhirlpool | Self::PumpSwapAmm
+            Self::RaydiumCpmm | Self::PumpSwapAmm | Self::MeteoraDammV2
+        )
+    }
+
+    /// True for the Fase-2.5 scope-expansion venues (tags 3–5), which are gated by
+    /// `M1-GATE-EXT` and never mainnet-eligible until their differential is green.
+    #[inline]
+    pub const fn is_fase25(self) -> bool {
+        matches!(
+            self,
+            Self::MeteoraDlmm | Self::MeteoraDammV2 | Self::RaydiumClmm
         )
     }
 }
@@ -226,11 +252,52 @@ mod tests {
             DexKind::RaydiumCpmm,
             DexKind::OrcaWhirlpool,
             DexKind::PumpSwapAmm,
+            DexKind::MeteoraDlmm,
+            DexKind::MeteoraDammV2,
+            DexKind::RaydiumClmm,
         ] {
             assert_eq!(DexKind::from_tag(k.tag()), Some(k));
-            assert!(k.is_constant_product());
         }
-        assert_eq!(DexKind::from_tag(3), None);
+        // Tags 0..=5 are defined; 6+ is unknown.
+        assert_eq!(DexKind::from_tag(6), None);
+    }
+
+    #[test]
+    fn constant_product_classification_is_exact() {
+        // Pure x*y=k venues only.
+        for cp in [
+            DexKind::RaydiumCpmm,
+            DexKind::PumpSwapAmm,
+            DexKind::MeteoraDammV2,
+        ] {
+            assert!(cp.is_constant_product(), "{cp:?} should be CP");
+        }
+        // Concentrated (in-range CP only) + constant-sum venues are NOT pure CP.
+        for non_cp in [
+            DexKind::OrcaWhirlpool, // sqrt-price CLMM
+            DexKind::RaydiumClmm,   // sqrt-price CLMM
+            DexKind::MeteoraDlmm,   // constant-sum bins
+        ] {
+            assert!(!non_cp.is_constant_product(), "{non_cp:?} is not pure CP");
+        }
+    }
+
+    #[test]
+    fn fase25_venues_are_flagged() {
+        for v in [
+            DexKind::MeteoraDlmm,
+            DexKind::MeteoraDammV2,
+            DexKind::RaydiumClmm,
+        ] {
+            assert!(v.is_fase25(), "{v:?} is Fase 2.5");
+        }
+        for w in [
+            DexKind::RaydiumCpmm,
+            DexKind::OrcaWhirlpool,
+            DexKind::PumpSwapAmm,
+        ] {
+            assert!(!w.is_fase25(), "{w:?} is Wave-1, not Fase 2.5");
+        }
     }
 
     #[test]

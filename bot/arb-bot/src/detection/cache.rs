@@ -99,6 +99,11 @@ impl PoolStateCache {
         self.pools.get(pool).map(|c| c.view)
     }
 
+    /// All cached `(pool, view)` pairs — the working set the cycle finder (detection-12) searches.
+    pub fn views(&self) -> Vec<(Pubkey, PriceView)> {
+        self.pools.iter().map(|(k, c)| (*k, c.view)).collect()
+    }
+
     pub fn len(&self) -> usize {
         self.pools.len()
     }

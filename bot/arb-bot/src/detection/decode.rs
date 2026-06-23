@@ -289,6 +289,333 @@ pub fn decode_pumpswap_total_fee_bps(global_config_data: &[u8]) -> Option<u64> {
     lp.checked_add(protocol)?.checked_add(coin_creator)
 }
 
+// ============================================================================
+// detection-11 — Fase 2.5 venues (gated by M1-GATE-EXT): Meteora DLMM, Meteora DAMM v2,
+// Raydium CLMM.
+//
+// Every offset / discriminator / LEN below is from the `fase25-venue-research` workflow
+// (2026-06-23): each was cross-checked against the canonical on-chain Rust struct, the official
+// IDL, AND a live mainnet `getAccountInfo` (Chainstack), then adversarially second-sourced.
+//
+// ⚠️ TWO Anchor discriminators COLLIDE by struct name across programs (the 8-byte tag is
+// `sha256("account:<Name>")`, which depends only on the type name, not the program):
+//   * Raydium CLMM `PoolState` shares [247,237,227,245,215,195,222,70] with Raydium CPMM.
+//   * Meteora DAMM v2 `Pool` shares [241,154,109,4,17,177,109,188] with PumpSwap.
+// The discriminator alone CANNOT disambiguate — callers route by the account's OWNER program id.
+// Each decoder additionally pins the venue's exact data LEN as a secondary guard (CPMM 637 vs
+// CLMM 1544; DAMM v2 1112 vs PumpSwap variable), so a CPMM/PumpSwap buffer fed to the wrong
+// decoder fails the length check rather than mis-decoding.
+// ============================================================================
+
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        data.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+// ---- Meteora DLMM (`lb_clmm::LbPair`) ----
+/// Meteora DLMM `LbPair` account discriminator (`sha256("account:LbPair")[..8]`).
+pub const DLMM_LB_PAIR_DISCRIMINATOR: [u8; 8] = [33, 11, 49, 98, 181, 101, 177, 13];
+/// Meteora DLMM `BinArray` account discriminator (the swap walks these for liquidity).
+pub const DLMM_BIN_ARRAY_DISCRIMINATOR: [u8; 8] = [92, 142, 92, 220, 5, 148, 70, 181];
+/// DLMM total-fee-rate denominator (`FEE_PRECISION`): rates are over 1e9 (1e9 == 100%).
+pub const DLMM_FEE_DENOMINATOR: u64 = 1_000_000_000;
+/// DLMM price-ratio bps denominator: adjacent bins differ by `1 + bin_step/10000`.
+pub const DLMM_BASIS_POINT_MAX: u64 = 10_000;
+
+/// Verified `LbPair` byte offsets (absolute, incl. the 8-byte discriminator). The
+/// `StaticParameters` fields use the research-verdict-CORRECTED absolute offsets (IDL relative
+/// layout + base 8), NOT the spec's off-by-8 "convenience" cluster.
+pub mod dlmm_lb_pair_offsets {
+    pub const BASE_FACTOR: usize = 8; // u16  (StaticParameters.base_factor)
+    pub const PROTOCOL_SHARE: usize = 32; // u16
+    pub const BASE_FEE_POWER_FACTOR: usize = 34; // u8
+    pub const COLLECT_FEE_MODE: usize = 36; // u8 (0=InputOnly, 1=OnlyY)
+    pub const ACTIVE_ID: usize = 76; // i32 (current price pointer)
+    pub const BIN_STEP: usize = 80; // u16 (bps)
+    pub const STATUS: usize = 82; // u8 (0=Enabled)
+    pub const TOKEN_X_MINT: usize = 88;
+    pub const TOKEN_Y_MINT: usize = 120;
+    pub const RESERVE_X: usize = 152; // X vault token-account
+    pub const RESERVE_Y: usize = 184; // Y vault token-account
+    pub const TOKEN_MINT_X_PROGRAM_FLAG: usize = 880; // u8 (0=SPL, 1=Token2022)
+    pub const TOKEN_MINT_Y_PROGRAM_FLAG: usize = 881; // u8
+    pub const LEN: usize = 904;
+}
+
+/// Decoded Meteora DLMM `LbPair` (the swap/price-relevant fields). The active bin's per-bin
+/// reserves come from the `BinArray` accounts, not this struct; `active_id` + `bin_step` give the
+/// current bin price `(1 + bin_step/10000)^active_id`, and `base_factor`/`bin_step` give the base
+/// fee. The variable (volatility) fee is execution-time-clock-dependent and lives in the quoter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DlmmLbPair {
+    pub base_factor: u16,
+    pub protocol_share: u16,
+    pub base_fee_power_factor: u8,
+    /// 0 = fee on input (InputOnly), 1 = fee on the Y token (OnlyY).
+    pub collect_fee_mode: u8,
+    pub active_id: i32,
+    pub bin_step: u16,
+    pub status: u8,
+    pub token_x_mint: Pubkey,
+    pub token_y_mint: Pubkey,
+    pub reserve_x: Pubkey,
+    pub reserve_y: Pubkey,
+    pub token_x_is_token2022: bool,
+    pub token_y_is_token2022: bool,
+}
+
+impl DlmmLbPair {
+    /// True iff swaps are enabled (`status == 0`).
+    pub fn swap_enabled(&self) -> bool {
+        self.status == 0
+    }
+
+    /// The DLMM **base** fee rate over [`DLMM_FEE_DENOMINATOR`] (1e9):
+    /// `base_factor * bin_step * 10 * 10^base_fee_power_factor`. The total on-chain fee adds a
+    /// volatility-dependent variable component (see the quoter); this is the static floor.
+    pub fn base_fee_rate(&self) -> Option<u64> {
+        let bin_step = self.bin_step as u64;
+        let base = (self.base_factor as u64)
+            .checked_mul(bin_step)?
+            .checked_mul(10)?;
+        let pow = 10u64.checked_pow(self.base_fee_power_factor as u32)?;
+        base.checked_mul(pow)
+    }
+}
+
+/// Decode a Meteora DLMM `LbPair`. `None` on wrong discriminator or wrong/short buffer.
+pub fn decode_dlmm_lb_pair(data: &[u8]) -> Option<DlmmLbPair> {
+    use dlmm_lb_pair_offsets as o;
+    if !has_anchor_discriminator(data, &DLMM_LB_PAIR_DISCRIMINATOR) {
+        return None;
+    }
+    if data.len() != o::LEN {
+        return None; // exact-LEN guard disambiguates the (none here, but consistent) collisions
+    }
+    Some(DlmmLbPair {
+        base_factor: read_u16(data, o::BASE_FACTOR)?,
+        protocol_share: read_u16(data, o::PROTOCOL_SHARE)?,
+        base_fee_power_factor: *data.get(o::BASE_FEE_POWER_FACTOR)?,
+        collect_fee_mode: *data.get(o::COLLECT_FEE_MODE)?,
+        active_id: read_i32(data, o::ACTIVE_ID)?,
+        bin_step: read_u16(data, o::BIN_STEP)?,
+        status: *data.get(o::STATUS)?,
+        token_x_mint: read_pubkey(data, o::TOKEN_X_MINT)?,
+        token_y_mint: read_pubkey(data, o::TOKEN_Y_MINT)?,
+        reserve_x: read_pubkey(data, o::RESERVE_X)?,
+        reserve_y: read_pubkey(data, o::RESERVE_Y)?,
+        token_x_is_token2022: *data.get(o::TOKEN_MINT_X_PROGRAM_FLAG)? != 0,
+        token_y_is_token2022: *data.get(o::TOKEN_MINT_Y_PROGRAM_FLAG)? != 0,
+    })
+}
+
+// ---- Meteora DAMM v2 / CP-AMM (`cp_amm::Pool`) ----
+/// Meteora DAMM v2 `Pool` account discriminator (`sha256("account:Pool")[..8]`). COLLIDES with
+/// PumpSwap `Pool`; disambiguate by owner + the exact LEN guard (1112).
+pub const DAMM_V2_POOL_DISCRIMINATOR: [u8; 8] = [241, 154, 109, 4, 17, 177, 109, 188];
+/// DAMM v2 trade-fee denominator (`FEE_DENOMINATOR`): numerators are over 1e9.
+pub const DAMM_V2_FEE_DENOMINATOR: u64 = 1_000_000_000;
+
+/// Verified `Pool` byte offsets (absolute, incl. the 8-byte discriminator).
+pub mod damm_v2_pool_offsets {
+    pub const CLIFF_FEE_NUMERATOR: usize = 8; // u64 (base fee at cliff, over 1e9)
+    pub const BASE_FEE_MODE: usize = 16; // u8 (0=TimeLinear,1=TimeExp,2=RateLimiter,3/4=MktCap)
+    pub const PROTOCOL_FEE_PERCENT: usize = 48; // u8 (split only; no user-output effect)
+    pub const DYNAMIC_FEE_INITIALIZED: usize = 56; // u8 (!=0 => variable fee active)
+    pub const TOKEN_A_MINT: usize = 168;
+    pub const TOKEN_B_MINT: usize = 200;
+    pub const TOKEN_A_VAULT: usize = 232;
+    pub const TOKEN_B_VAULT: usize = 264;
+    pub const LIQUIDITY: usize = 360; // u128 (L)
+    pub const SQRT_MIN_PRICE: usize = 424; // u128 (band floor, A->B)
+    pub const SQRT_MAX_PRICE: usize = 440; // u128 (band ceil, B->A)
+    pub const SQRT_PRICE: usize = 456; // u128 (current, Q64.64)
+    pub const POOL_STATUS: usize = 481; // u8 (1=disabled)
+    pub const TOKEN_A_FLAG: usize = 482; // u8 (0=SPL,1=Token2022)
+    pub const TOKEN_B_FLAG: usize = 483; // u8
+    pub const COLLECT_FEE_MODE: usize = 484; // u8 (0=BothToken,1=OnlyB,2=Compounding)
+    pub const FEE_VERSION: usize = 486; // u8 (0 => max num 5e8, 1 => 9.9e8)
+    pub const LEN: usize = 1112;
+}
+
+/// Decoded Meteora DAMM v2 `Pool` — a Uniswap-V3-style concentrated-liquidity AMM with a single
+/// full-range position (NOT `x*y=k`). The sqrt-price/liquidity/band fields drive the bit-exact
+/// quoter; the fee fields select the base-fee scheduler + variable-fee path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DammV2Pool {
+    pub cliff_fee_numerator: u64,
+    pub base_fee_mode: u8,
+    pub protocol_fee_percent: u8,
+    pub dynamic_fee_initialized: bool,
+    pub token_a_mint: Pubkey,
+    pub token_b_mint: Pubkey,
+    pub token_a_vault: Pubkey,
+    pub token_b_vault: Pubkey,
+    pub liquidity: u128,
+    pub sqrt_min_price: u128,
+    pub sqrt_max_price: u128,
+    pub sqrt_price: u128,
+    pub pool_status: u8,
+    pub collect_fee_mode: u8,
+    pub fee_version: u8,
+    pub token_a_is_token2022: bool,
+    pub token_b_is_token2022: bool,
+}
+
+impl DammV2Pool {
+    /// True iff swaps are enabled (`pool_status != 1`).
+    pub fn swap_enabled(&self) -> bool {
+        self.pool_status != 1
+    }
+
+    /// Maximum total fee numerator (over [`DAMM_V2_FEE_DENOMINATOR`]) for this pool's
+    /// `fee_version`: 0 ⇒ 5e8 (50%), else 9.9e8 (99%).
+    pub fn max_fee_numerator(&self) -> u64 {
+        if self.fee_version == 0 {
+            500_000_000
+        } else {
+            990_000_000
+        }
+    }
+}
+
+/// Decode a Meteora DAMM v2 `Pool`. `None` on wrong discriminator or wrong/short buffer (the
+/// exact-LEN guard rejects a PumpSwap `Pool`, which shares the discriminator).
+pub fn decode_damm_v2_pool(data: &[u8]) -> Option<DammV2Pool> {
+    use damm_v2_pool_offsets as o;
+    if !has_anchor_discriminator(data, &DAMM_V2_POOL_DISCRIMINATOR) {
+        return None;
+    }
+    if data.len() != o::LEN {
+        return None;
+    }
+    Some(DammV2Pool {
+        cliff_fee_numerator: read_u64(data, o::CLIFF_FEE_NUMERATOR)?,
+        base_fee_mode: *data.get(o::BASE_FEE_MODE)?,
+        protocol_fee_percent: *data.get(o::PROTOCOL_FEE_PERCENT)?,
+        dynamic_fee_initialized: *data.get(o::DYNAMIC_FEE_INITIALIZED)? != 0,
+        token_a_mint: read_pubkey(data, o::TOKEN_A_MINT)?,
+        token_b_mint: read_pubkey(data, o::TOKEN_B_MINT)?,
+        token_a_vault: read_pubkey(data, o::TOKEN_A_VAULT)?,
+        token_b_vault: read_pubkey(data, o::TOKEN_B_VAULT)?,
+        liquidity: read_u128(data, o::LIQUIDITY)?,
+        sqrt_min_price: read_u128(data, o::SQRT_MIN_PRICE)?,
+        sqrt_max_price: read_u128(data, o::SQRT_MAX_PRICE)?,
+        sqrt_price: read_u128(data, o::SQRT_PRICE)?,
+        pool_status: *data.get(o::POOL_STATUS)?,
+        collect_fee_mode: *data.get(o::COLLECT_FEE_MODE)?,
+        fee_version: *data.get(o::FEE_VERSION)?,
+        token_a_is_token2022: *data.get(o::TOKEN_A_FLAG)? != 0,
+        token_b_is_token2022: *data.get(o::TOKEN_B_FLAG)? != 0,
+    })
+}
+
+// ---- Raydium CLMM (`amm::PoolState`, DEPLOYED LEGACY 1544-byte layout) ----
+/// Raydium CLMM `PoolState` discriminator (`sha256("account:PoolState")[..8]`). COLLIDES with
+/// Raydium CPMM `PoolState`; disambiguate by owner + the exact LEN guard (1544 vs CPMM 637).
+pub const RAYDIUM_CLMM_POOL_DISCRIMINATOR: [u8; 8] = [247, 237, 227, 245, 215, 195, 222, 70];
+/// Raydium CLMM `AmmConfig` discriminator (`sha256("account:AmmConfig")[..8]`). Shares the tag
+/// with Raydium CPMM `AmmConfig` but is a 117-byte account with `trade_fee_rate` at a different
+/// offset — pin by owner + LEN.
+pub const RAYDIUM_CLMM_AMM_CONFIG_DISCRIMINATOR: [u8; 8] = [218, 244, 33, 104, 203, 203, 43, 111];
+/// Raydium CLMM fee denominator (`FEE_RATE_DENOMINATOR_VALUE`): `trade_fee_rate` is over 1e6.
+pub const RAYDIUM_CLMM_FEE_DENOMINATOR: u64 = 1_000_000;
+
+/// Verified legacy `PoolState` byte offsets (absolute, incl. the 8-byte discriminator).
+pub mod raydium_clmm_pool_offsets {
+    pub const AMM_CONFIG: usize = 9; // points to the AmmConfig holding trade_fee_rate
+    pub const TOKEN_MINT_0: usize = 73;
+    pub const TOKEN_MINT_1: usize = 105;
+    pub const TOKEN_VAULT_0: usize = 137;
+    pub const TOKEN_VAULT_1: usize = 169;
+    pub const OBSERVATION_KEY: usize = 201;
+    pub const MINT_DECIMALS_0: usize = 233; // u8
+    pub const MINT_DECIMALS_1: usize = 234; // u8
+    pub const TICK_SPACING: usize = 235; // u16
+    pub const LIQUIDITY: usize = 237; // u128 (in-range L)
+    pub const SQRT_PRICE_X64: usize = 253; // u128 (Q64.64)
+    pub const TICK_CURRENT: usize = 269; // i32
+    pub const STATUS: usize = 389; // u8 (bit4/0x10 = swap disabled)
+    pub const LEN: usize = 1544;
+}
+
+/// Verified legacy `AmmConfig` byte offsets.
+pub mod raydium_clmm_amm_config_offsets {
+    pub const TRADE_FEE_RATE: usize = 47; // u32, over 1e6
+    pub const TICK_SPACING: usize = 51; // u16
+    pub const LEN: usize = 117;
+}
+
+/// Decoded Raydium CLMM legacy `PoolState` (swap/price-relevant fields). `liquidity` +
+/// `sqrt_price_x64` + `tick_current` drive the in-range sqrt-price quoter; `amm_config` resolves
+/// the static `trade_fee_rate`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RaydiumClmmPool {
+    pub amm_config: Pubkey,
+    pub token_mint_0: Pubkey,
+    pub token_mint_1: Pubkey,
+    pub token_vault_0: Pubkey,
+    pub token_vault_1: Pubkey,
+    pub observation_key: Pubkey,
+    pub mint_decimals_0: u8,
+    pub mint_decimals_1: u8,
+    pub tick_spacing: u16,
+    pub liquidity: u128,
+    pub sqrt_price_x64: u128,
+    pub tick_current: i32,
+    pub status: u8,
+}
+
+impl RaydiumClmmPool {
+    /// `status` bit 4 (mask `0x10`) set ⇒ swaps disabled.
+    pub const STATUS_SWAP_DISABLED_BIT: u8 = 0b1_0000;
+
+    /// True iff the pool currently permits swaps (bit 4 clear).
+    pub fn swap_enabled(&self) -> bool {
+        self.status & Self::STATUS_SWAP_DISABLED_BIT == 0
+    }
+}
+
+/// Decode a Raydium CLMM legacy `PoolState`. `None` on wrong discriminator or wrong/short buffer
+/// (the exact-LEN guard rejects a Raydium CPMM `PoolState`, which shares the discriminator).
+pub fn decode_raydium_clmm_pool(data: &[u8]) -> Option<RaydiumClmmPool> {
+    use raydium_clmm_pool_offsets as o;
+    if !has_anchor_discriminator(data, &RAYDIUM_CLMM_POOL_DISCRIMINATOR) {
+        return None;
+    }
+    if data.len() != o::LEN {
+        return None;
+    }
+    Some(RaydiumClmmPool {
+        amm_config: read_pubkey(data, o::AMM_CONFIG)?,
+        token_mint_0: read_pubkey(data, o::TOKEN_MINT_0)?,
+        token_mint_1: read_pubkey(data, o::TOKEN_MINT_1)?,
+        token_vault_0: read_pubkey(data, o::TOKEN_VAULT_0)?,
+        token_vault_1: read_pubkey(data, o::TOKEN_VAULT_1)?,
+        observation_key: read_pubkey(data, o::OBSERVATION_KEY)?,
+        mint_decimals_0: *data.get(o::MINT_DECIMALS_0)?,
+        mint_decimals_1: *data.get(o::MINT_DECIMALS_1)?,
+        tick_spacing: read_u16(data, o::TICK_SPACING)?,
+        liquidity: read_u128(data, o::LIQUIDITY)?,
+        sqrt_price_x64: read_u128(data, o::SQRT_PRICE_X64)?,
+        tick_current: read_i32(data, o::TICK_CURRENT)?,
+        status: *data.get(o::STATUS)?,
+    })
+}
+
+/// Raydium CLMM `trade_fee_rate` (numerator over [`RAYDIUM_CLMM_FEE_DENOMINATOR`]), read from the
+/// pool's separate legacy `AmmConfig` account. `None` on wrong discriminator or wrong/short buffer.
+pub fn decode_raydium_clmm_trade_fee_rate(data: &[u8]) -> Option<u32> {
+    if !has_anchor_discriminator(data, &RAYDIUM_CLMM_AMM_CONFIG_DISCRIMINATOR) {
+        return None;
+    }
+    if data.len() != raydium_clmm_amm_config_offsets::LEN {
+        return None;
+    }
+    read_u32(data, raydium_clmm_amm_config_offsets::TRADE_FEE_RATE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +832,194 @@ mod tests {
         let bps = decode_pumpswap_total_fee_bps(&data).expect("global config decodes");
         assert_eq!(bps, 30); // 20 lp + 5 protocol + 5 coin-creator
         assert_eq!(PUMPSWAP_FEE_DENOMINATOR, 10_000);
+    }
+
+    // ---- Fase 2.5 decoders (detection-11) ----
+    //
+    // We don't embed a full real-byte base64 fixture for these (would need a fresh live RPC pull
+    // beyond this session), so instead we lock every verified OFFSET by writing the research's
+    // live-mainnet field VALUES at their verified offsets into a correctly-sized buffer and
+    // asserting the decoder reads them back. This pins the offset arithmetic + discriminator +
+    // exact-LEN guard; the byte-for-byte CPI differential is the M1-GATE-EXT step.
+
+    fn put_pk(b: &mut [u8], o: usize, p: &Pubkey) {
+        b[o..o + 32].copy_from_slice(&p.to_bytes());
+    }
+    fn put_u16(b: &mut [u8], o: usize, v: u16) {
+        b[o..o + 2].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_u32(b: &mut [u8], o: usize, v: u32) {
+        b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_i32(b: &mut [u8], o: usize, v: i32) {
+        b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_u64(b: &mut [u8], o: usize, v: u64) {
+        b[o..o + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put_u128(b: &mut [u8], o: usize, v: u128) {
+        b[o..o + 16].copy_from_slice(&v.to_le_bytes());
+    }
+
+    #[test]
+    fn dlmm_lb_pair_decodes_at_verified_offsets() {
+        use dlmm_lb_pair_offsets as o;
+        let mx = Pubkey::new_from_array([0x11; 32]);
+        let my = Pubkey::new_from_array([0x22; 32]);
+        let rx = Pubkey::new_from_array([0x33; 32]);
+        let ry = Pubkey::new_from_array([0x44; 32]);
+        let mut b = vec![0u8; o::LEN];
+        b[0..8].copy_from_slice(&DLMM_LB_PAIR_DISCRIMINATOR);
+        // Live SOL/USDC LbPair values (research snapshot).
+        put_u16(&mut b, o::BASE_FACTOR, 10_000);
+        put_u16(&mut b, o::PROTOCOL_SHARE, 1_000);
+        b[o::BASE_FEE_POWER_FACTOR] = 0;
+        b[o::COLLECT_FEE_MODE] = 0; // InputOnly
+        put_i32(&mut b, o::ACTIVE_ID, -26_387);
+        put_u16(&mut b, o::BIN_STEP, 1);
+        b[o::STATUS] = 0;
+        put_pk(&mut b, o::TOKEN_X_MINT, &mx);
+        put_pk(&mut b, o::TOKEN_Y_MINT, &my);
+        put_pk(&mut b, o::RESERVE_X, &rx);
+        put_pk(&mut b, o::RESERVE_Y, &ry);
+        b[o::TOKEN_MINT_X_PROGRAM_FLAG] = 0;
+        b[o::TOKEN_MINT_Y_PROGRAM_FLAG] = 0;
+
+        let p = decode_dlmm_lb_pair(&b).expect("dlmm decodes");
+        assert_eq!(p.active_id, -26_387);
+        assert_eq!(p.bin_step, 1);
+        assert_eq!(p.base_factor, 10_000);
+        assert_eq!(p.protocol_share, 1_000);
+        assert_eq!(p.collect_fee_mode, 0);
+        assert!(p.swap_enabled());
+        assert_eq!(p.token_x_mint, mx);
+        assert_eq!(p.token_y_mint, my);
+        assert_eq!(p.reserve_x, rx);
+        assert_eq!(p.reserve_y, ry);
+        assert!(!p.token_x_is_token2022 && !p.token_y_is_token2022);
+        // base_fee_rate = 10000 * 1 * 10 * 10^0 = 100_000 over 1e9 = 0.01%.
+        assert_eq!(p.base_fee_rate(), Some(100_000));
+        assert_eq!(DLMM_FEE_DENOMINATOR, 1_000_000_000);
+
+        // Wrong LEN (e.g. truncated) and wrong discriminator both fail closed.
+        assert!(decode_dlmm_lb_pair(&b[..o::LEN - 1]).is_none());
+        let mut bad = b.clone();
+        bad[0] ^= 0xFF;
+        assert!(decode_dlmm_lb_pair(&bad).is_none());
+    }
+
+    #[test]
+    fn damm_v2_pool_decodes_at_verified_offsets() {
+        use damm_v2_pool_offsets as o;
+        let am = Pubkey::new_from_array([0xA1; 32]);
+        let bm = Pubkey::new_from_array([0xB2; 32]);
+        let av = Pubkey::new_from_array([0xA3; 32]);
+        let bv = Pubkey::new_from_array([0xB4; 32]);
+        let mut b = vec![0u8; o::LEN];
+        b[0..8].copy_from_slice(&DAMM_V2_POOL_DISCRIMINATOR);
+        // Verified mainnet pool E8zRkDw… fee/band fields.
+        put_u64(&mut b, o::CLIFF_FEE_NUMERATOR, 500_000_000);
+        b[o::BASE_FEE_MODE] = 1; // TimeExponential
+        b[o::PROTOCOL_FEE_PERCENT] = 20;
+        b[o::DYNAMIC_FEE_INITIALIZED] = 1;
+        put_pk(&mut b, o::TOKEN_A_MINT, &am);
+        put_pk(&mut b, o::TOKEN_B_MINT, &bm);
+        put_pk(&mut b, o::TOKEN_A_VAULT, &av);
+        put_pk(&mut b, o::TOKEN_B_VAULT, &bv);
+        put_u128(&mut b, o::LIQUIDITY, 123_456_789_000);
+        put_u128(&mut b, o::SQRT_MIN_PRICE, 4_295_048_016);
+        put_u128(
+            &mut b,
+            o::SQRT_MAX_PRICE,
+            79_226_673_521_066_979_257_578_248_091,
+        );
+        put_u128(&mut b, o::SQRT_PRICE, 1u128 << 64);
+        b[o::POOL_STATUS] = 0;
+        b[o::COLLECT_FEE_MODE] = 1; // OnlyB
+        b[o::FEE_VERSION] = 0;
+        b[o::TOKEN_A_FLAG] = 0;
+        b[o::TOKEN_B_FLAG] = 0;
+
+        let p = decode_damm_v2_pool(&b).expect("damm v2 decodes");
+        assert_eq!(p.cliff_fee_numerator, 500_000_000);
+        assert_eq!(p.base_fee_mode, 1);
+        assert_eq!(p.protocol_fee_percent, 20);
+        assert!(p.dynamic_fee_initialized);
+        assert_eq!(p.liquidity, 123_456_789_000);
+        assert_eq!(p.sqrt_min_price, 4_295_048_016);
+        assert_eq!(p.sqrt_max_price, 79_226_673_521_066_979_257_578_248_091);
+        assert_eq!(p.sqrt_price, 1u128 << 64);
+        assert_eq!(p.collect_fee_mode, 1);
+        assert_eq!(p.max_fee_numerator(), 500_000_000); // fee_version 0
+        assert!(p.swap_enabled());
+        assert_eq!(p.token_a_mint, am);
+        assert_eq!(p.token_b_vault, bv);
+
+        // A PumpSwap `Pool` shares the discriminator but is NOT 1112 bytes → rejected.
+        let mut pumpswap_len = vec![0u8; 300];
+        pumpswap_len[0..8].copy_from_slice(&DAMM_V2_POOL_DISCRIMINATOR);
+        assert!(decode_damm_v2_pool(&pumpswap_len).is_none());
+    }
+
+    #[test]
+    fn raydium_clmm_pool_and_config_decode_at_verified_offsets() {
+        use raydium_clmm_pool_offsets as o;
+        let cfg = Pubkey::new_from_array([0xC1; 32]);
+        let m0 = Pubkey::new_from_array([0x01; 32]);
+        let m1 = Pubkey::new_from_array([0x02; 32]);
+        let v0 = Pubkey::new_from_array([0x03; 32]);
+        let v1 = Pubkey::new_from_array([0x04; 32]);
+        let obs = Pubkey::new_from_array([0x05; 32]);
+        let mut b = vec![0u8; o::LEN];
+        b[0..8].copy_from_slice(&RAYDIUM_CLMM_POOL_DISCRIMINATOR);
+        // Live SOL/USDC pool 3ucNos4… values.
+        put_pk(&mut b, o::AMM_CONFIG, &cfg);
+        put_pk(&mut b, o::TOKEN_MINT_0, &m0);
+        put_pk(&mut b, o::TOKEN_MINT_1, &m1);
+        put_pk(&mut b, o::TOKEN_VAULT_0, &v0);
+        put_pk(&mut b, o::TOKEN_VAULT_1, &v1);
+        put_pk(&mut b, o::OBSERVATION_KEY, &obs);
+        b[o::MINT_DECIMALS_0] = 9;
+        b[o::MINT_DECIMALS_1] = 6;
+        put_u16(&mut b, o::TICK_SPACING, 1);
+        put_u128(&mut b, o::LIQUIDITY, 92_625_898_297_868);
+        put_u128(&mut b, o::SQRT_PRICE_X64, 4_930_817_903_949_873_103);
+        put_i32(&mut b, o::TICK_CURRENT, -26_389);
+        b[o::STATUS] = 0;
+
+        let p = decode_raydium_clmm_pool(&b).expect("clmm pool decodes");
+        assert_eq!(p.amm_config, cfg);
+        assert_eq!(p.tick_spacing, 1);
+        assert_eq!(p.liquidity, 92_625_898_297_868);
+        assert_eq!(p.sqrt_price_x64, 4_930_817_903_949_873_103);
+        assert_eq!(p.tick_current, -26_389);
+        assert_eq!(p.mint_decimals_0, 9);
+        assert_eq!(p.mint_decimals_1, 6);
+        assert!(p.swap_enabled());
+        // sqrt_price decodes to a sane SOL/USDC level after decimal adjust (9 base / 6 quote).
+        let usdc_per_sol = sqrt_price_x64_to_price(p.sqrt_price_x64) * 1_000.0;
+        assert!((20.0..2_000.0).contains(&usdc_per_sol), "{usdc_per_sol}");
+
+        // status bit 4 disables swaps.
+        let mut disabled = b.clone();
+        disabled[o::STATUS] = RaydiumClmmPool::STATUS_SWAP_DISABLED_BIT;
+        assert!(!decode_raydium_clmm_pool(&disabled).unwrap().swap_enabled());
+
+        // A Raydium CPMM `PoolState` shares the discriminator but is 637 bytes → rejected.
+        let mut cpmm_len = vec![0u8; offsets::raydium_cpmm_pool::LEN];
+        cpmm_len[0..8].copy_from_slice(&RAYDIUM_CLMM_POOL_DISCRIMINATOR);
+        assert!(decode_raydium_clmm_pool(&cpmm_len).is_none());
+
+        // AmmConfig: trade_fee_rate=400 (0.04%) at offset 47.
+        let mut cfgbuf = vec![0u8; raydium_clmm_amm_config_offsets::LEN];
+        cfgbuf[0..8].copy_from_slice(&RAYDIUM_CLMM_AMM_CONFIG_DISCRIMINATOR);
+        put_u32(
+            &mut cfgbuf,
+            raydium_clmm_amm_config_offsets::TRADE_FEE_RATE,
+            400,
+        );
+        assert_eq!(decode_raydium_clmm_trade_fee_rate(&cfgbuf), Some(400));
+        assert_eq!(RAYDIUM_CLMM_FEE_DENOMINATOR, 1_000_000);
+        assert!(decode_raydium_clmm_trade_fee_rate(&cfgbuf[..10]).is_none());
     }
 }

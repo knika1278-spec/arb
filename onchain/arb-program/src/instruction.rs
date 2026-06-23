@@ -18,8 +18,22 @@ use arb_types::{ArbError, DexKind, SwapDir};
 use solana_program::program_error::ProgramError;
 
 pub const TAG_TRY_ARBITRAGE: u8 = 0;
+/// onchain-20: N-leg (triangle+) variant. Distinct tag so the proven 2-leg path (tag 0) is
+/// never reinterpreted; this path is gated by `M1-GATE-EXT` / `testing-11`.
+pub const TAG_TRY_ARBITRAGE_N: u8 = 1;
 pub const LEG_LEN: usize = 20;
 pub const INSTRUCTION_LEN: usize = 1 + 8 + LEG_LEN * 2;
+
+/// N-leg header: `tag(1) + min_profit(8) + leg_count(1)`.
+pub const N_HEADER_LEN: usize = 1 + 8 + 1;
+/// Smallest cycle the N-leg path accepts (a 2-leg round-trip; the 3-leg triangle is the
+/// motivating case).
+pub const MIN_LEGS: usize = 2;
+/// Account-budget bound on the cycle length (locks<128 / tx≤1232B across N venues — enforced in
+/// detail by `txbuilder-15`). The triangle is 3; 4 leaves head-room without risking the budget.
+pub const MAX_LEGS: usize = 4;
+/// Largest possible packed N-leg instruction.
+pub const MAX_N_INSTRUCTION_LEN: usize = N_HEADER_LEN + LEG_LEN * MAX_LEGS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LegDescriptor {
@@ -29,6 +43,18 @@ pub struct LegDescriptor {
     pub account_count: u8,
     pub amount_in: u64,
     pub min_out: u64,
+}
+
+impl LegDescriptor {
+    /// Inert filler for the unused tail of a fixed-capacity leg array (never read: only the
+    /// first `leg_count` entries are meaningful).
+    const PLACEHOLDER: Self = Self {
+        dex: DexKind::RaydiumCpmm,
+        dir: SwapDir::AtoB,
+        account_count: 0,
+        amount_in: 0,
+        min_out: 0,
+    };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,12 +122,100 @@ impl TryArbitrageData {
     }
 }
 
-fn pack_leg(out: &mut [u8; INSTRUCTION_LEN], at: usize, leg: &LegDescriptor) {
+fn pack_leg(out: &mut [u8], at: usize, leg: &LegDescriptor) {
     out[at] = leg.dex.tag();
     out[at + 1] = leg.dir.tag();
     out[at + 2] = leg.account_count;
     out[at + 4..at + 12].copy_from_slice(&leg.amount_in.to_le_bytes());
     out[at + 12..at + 20].copy_from_slice(&leg.min_out.to_le_bytes());
+}
+
+/// onchain-20: the N-leg (triangle+) instruction. A cycle `base → t1 → … → t_{N-1} → base` of
+/// `leg_count` swaps; leg `i` swaps `ata[i] → ata[(i+1) mod N]`. Layout:
+/// ```text
+/// 0       1        tag (1 = TryArbitrageN)
+/// 1       8        min_profit: u64
+/// 9       1        leg_count: u8   (MIN_LEGS..=MAX_LEGS)
+/// 10      20*N     legs: [LegDescriptor; leg_count]
+/// ```
+/// As in the 2-leg path, a leg's `amount_in == 0` (for any non-first leg) means "use the
+/// measured balance delta the previous leg produced into this leg's input ATA" (invariant §7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TryArbitrageNData {
+    pub min_profit: u64,
+    pub leg_count: u8,
+    /// Only `legs[..leg_count]` are meaningful; the tail is [`LegDescriptor::PLACEHOLDER`].
+    pub legs: [LegDescriptor; MAX_LEGS],
+}
+
+impl TryArbitrageNData {
+    /// Build from a slice of `MIN_LEGS..=MAX_LEGS` legs (the client/tx-builder entry). `None` if
+    /// the leg count is out of range; fills the unused tail with [`LegDescriptor::PLACEHOLDER`].
+    pub fn from_legs(min_profit: u64, legs: &[LegDescriptor]) -> Option<Self> {
+        let n = legs.len();
+        if !(MIN_LEGS..=MAX_LEGS).contains(&n) {
+            return None;
+        }
+        let mut arr = [LegDescriptor::PLACEHOLDER; MAX_LEGS];
+        arr[..n].copy_from_slice(legs);
+        Some(Self {
+            min_profit,
+            leg_count: n as u8,
+            legs: arr,
+        })
+    }
+
+    /// The meaningful legs (`&legs[..leg_count]`).
+    pub fn legs(&self) -> &[LegDescriptor] {
+        &self.legs[..self.leg_count as usize]
+    }
+
+    /// Bytes a `pack()` of this descriptor occupies.
+    pub fn packed_len(&self) -> usize {
+        N_HEADER_LEN + LEG_LEN * self.leg_count as usize
+    }
+
+    pub fn unpack(data: &[u8]) -> Result<Self, ProgramError> {
+        let bad = || to_program_error(ArbError::MalformedInstructionData);
+        if data.len() < N_HEADER_LEN {
+            return Err(bad());
+        }
+        if data[0] != TAG_TRY_ARBITRAGE_N {
+            return Err(bad());
+        }
+        let min_profit = read_u64(data, 1)?;
+        let leg_count = data[9] as usize;
+        if !(MIN_LEGS..=MAX_LEGS).contains(&leg_count) {
+            return Err(bad());
+        }
+        let needed = N_HEADER_LEN
+            .checked_add(LEG_LEN.checked_mul(leg_count).ok_or_else(bad)?)
+            .ok_or_else(bad)?;
+        if data.len() < needed {
+            return Err(bad());
+        }
+        let mut legs = [LegDescriptor::PLACEHOLDER; MAX_LEGS];
+        for (i, slot) in legs.iter_mut().enumerate().take(leg_count) {
+            *slot = unpack_leg(data, N_HEADER_LEN + i * LEG_LEN)?;
+        }
+        Ok(Self {
+            min_profit,
+            leg_count: leg_count as u8,
+            legs,
+        })
+    }
+
+    /// Symmetric packer (client/tests): writes into a max-size buffer, returns `(buf, used_len)`.
+    pub fn pack(&self) -> ([u8; MAX_N_INSTRUCTION_LEN], usize) {
+        let mut out = [0u8; MAX_N_INSTRUCTION_LEN];
+        out[0] = TAG_TRY_ARBITRAGE_N;
+        out[1..9].copy_from_slice(&self.min_profit.to_le_bytes());
+        out[9] = self.leg_count;
+        for i in 0..self.leg_count as usize {
+            pack_leg(&mut out, N_HEADER_LEN + i * LEG_LEN, &self.legs[i]);
+        }
+        (out, self.packed_len())
+    }
 }
 
 #[cfg(test)]
@@ -156,5 +270,60 @@ mod tests {
         .to_vec();
         bytes[0] = 7; // bad tag
         assert!(TryArbitrageData::unpack(&bytes).is_err());
+    }
+
+    fn leg(dex: DexKind, dir: SwapDir, ac: u8, amt: u64, min: u64) -> LegDescriptor {
+        LegDescriptor {
+            dex,
+            dir,
+            account_count: ac,
+            amount_in: amt,
+            min_out: min,
+        }
+    }
+
+    #[test]
+    fn n_leg_pack_unpack_roundtrip_triangle() {
+        let mut legs = [LegDescriptor::PLACEHOLDER; MAX_LEGS];
+        legs[0] = leg(DexKind::MeteoraDammV2, SwapDir::AtoB, 12, 1_000_000, 1);
+        legs[1] = leg(DexKind::MeteoraDlmm, SwapDir::AtoB, 14, 0, 1); // 0 => measured delta
+        legs[2] = leg(DexKind::RaydiumClmm, SwapDir::BtoA, 15, 0, 1_001_000);
+        let d = TryArbitrageNData {
+            min_profit: 42_000,
+            leg_count: 3,
+            legs,
+        };
+        let (buf, len) = d.pack();
+        assert_eq!(len, N_HEADER_LEN + LEG_LEN * 3);
+        let got = TryArbitrageNData::unpack(&buf[..len]).unwrap();
+        assert_eq!(got, d);
+        assert_eq!(got.legs().len(), 3);
+        assert_eq!(got.legs()[2].dex, DexKind::RaydiumClmm);
+    }
+
+    #[test]
+    fn n_leg_rejects_bad_count_and_short_buffer() {
+        // leg_count below MIN / above MAX.
+        let mut hdr = [0u8; MAX_N_INSTRUCTION_LEN];
+        hdr[0] = TAG_TRY_ARBITRAGE_N;
+        hdr[9] = 1; // < MIN_LEGS
+        assert!(TryArbitrageNData::unpack(&hdr).is_err());
+        hdr[9] = (MAX_LEGS + 1) as u8;
+        assert!(TryArbitrageNData::unpack(&hdr).is_err());
+        // Valid count but the buffer is too short to hold the legs.
+        hdr[9] = 3;
+        assert!(TryArbitrageNData::unpack(&hdr[..N_HEADER_LEN + LEG_LEN]).is_err());
+        // Wrong tag is rejected.
+        let mut legs = [LegDescriptor::PLACEHOLDER; MAX_LEGS];
+        legs[0] = leg(DexKind::RaydiumCpmm, SwapDir::AtoB, 1, 1, 1);
+        legs[1] = leg(DexKind::PumpSwapAmm, SwapDir::BtoA, 1, 0, 1);
+        let (mut buf, len) = (TryArbitrageNData {
+            min_profit: 1,
+            leg_count: 2,
+            legs,
+        })
+        .pack();
+        buf[0] = TAG_TRY_ARBITRAGE; // 2-leg tag must not parse as N-leg
+        assert!(TryArbitrageNData::unpack(&buf[..len]).is_err());
     }
 }

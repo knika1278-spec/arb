@@ -50,6 +50,10 @@ pub struct DetectionMetrics {
     decode_err_raydium_cpmm: AtomicU64,
     decode_err_orca_whirlpool: AtomicU64,
     decode_err_pumpswap: AtomicU64,
+    // Fase 2.5 venues
+    decode_err_meteora_dlmm: AtomicU64,
+    decode_err_meteora_damm_v2: AtomicU64,
+    decode_err_raydium_clmm: AtomicU64,
     // gauges (last-set value, not cumulative)
     hot_pools: AtomicU64,
     stale_pools: AtomicU64,
@@ -97,6 +101,9 @@ impl DetectionMetrics {
             DexKind::RaydiumCpmm => &self.decode_err_raydium_cpmm,
             DexKind::OrcaWhirlpool => &self.decode_err_orca_whirlpool,
             DexKind::PumpSwapAmm => &self.decode_err_pumpswap,
+            DexKind::MeteoraDlmm => &self.decode_err_meteora_dlmm,
+            DexKind::MeteoraDammV2 => &self.decode_err_meteora_damm_v2,
+            DexKind::RaydiumClmm => &self.decode_err_raydium_clmm,
         }
         .fetch_add(1, Ordering::Relaxed);
     }
@@ -140,6 +147,9 @@ impl DetectionMetrics {
             DexKind::RaydiumCpmm => &self.decode_err_raydium_cpmm,
             DexKind::OrcaWhirlpool => &self.decode_err_orca_whirlpool,
             DexKind::PumpSwapAmm => &self.decode_err_pumpswap,
+            DexKind::MeteoraDlmm => &self.decode_err_meteora_dlmm,
+            DexKind::MeteoraDammV2 => &self.decode_err_meteora_damm_v2,
+            DexKind::RaydiumClmm => &self.decode_err_raydium_clmm,
         }
         .load(Ordering::Relaxed)
     }
@@ -163,7 +173,10 @@ impl DetectionMetrics {
             gap_reconciles_total: load(&self.gap_reconciles_total),
             decode_errors_total: load(&self.decode_err_raydium_cpmm)
                 + load(&self.decode_err_orca_whirlpool)
-                + load(&self.decode_err_pumpswap),
+                + load(&self.decode_err_pumpswap)
+                + load(&self.decode_err_meteora_dlmm)
+                + load(&self.decode_err_meteora_damm_v2)
+                + load(&self.decode_err_raydium_clmm),
             hot_pools: load(&self.hot_pools),
             stale_pools: load(&self.stale_pools),
         }
