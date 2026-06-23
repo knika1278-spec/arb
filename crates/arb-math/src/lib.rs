@@ -31,7 +31,7 @@ pub use policy::SizingPolicy;
 pub use rounding::RoundDirection;
 pub use search::optimal_delta_search;
 pub use u256::U256;
-pub use venue::{CpmmVenue, Quoter};
+pub use venue::{dyn_round_trip_net_out, CpmmVenue, QuoteError, QuoteIn, QuoteOut, Quoter};
 
 #[cfg(feature = "std")]
 pub use optimal::optimal_delta_general;

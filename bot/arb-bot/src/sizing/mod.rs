@@ -3,9 +3,21 @@
 //! base, and sizes it at the 90–95% policy. Dependency-free of `detection` (the contract is
 //! one-way: detection → sizing), so the caller maps `PoolQuote → PoolRef`.
 
+use arb_config::program_ids::{ORCA_WHIRLPOOL, PUMPSWAP_AMM, RAYDIUM_CPMM};
 use arb_math::{size_round_trip, CpmmReserves, RoundTrip, SizingPolicy};
 use arb_types::{DexKind, SwapDir};
 use solana_pubkey::Pubkey;
+
+/// sizing-3 venue registry: the on-chain swap program id for a venue, byte-equal to the pinned
+/// `arb-config` allowlist. The registry MIRRORS (never redefines) the on-chain trust boundary, so
+/// a quoted venue and the program the tx-builder is allowed to invoke can never drift apart.
+pub fn venue_program_id(dex: DexKind) -> Pubkey {
+    match dex {
+        DexKind::RaydiumCpmm => RAYDIUM_CPMM,
+        DexKind::OrcaWhirlpool => ORCA_WHIRLPOOL,
+        DexKind::PumpSwapAmm => PUMPSWAP_AMM,
+    }
+}
 
 /// A pool as sizing needs it: reserves (oriented `reserve_a`↔`mint_a`) + its two mints.
 #[derive(Clone, Copy, Debug)]
@@ -184,5 +196,20 @@ mod tests {
         let a = pool(1_000_000, 1_000_000, 1, 2);
         let b = pool(1_000_000, 1_000_000, 2, 1);
         assert!(size_best_direction(base, &a, &b, SizingPolicy::DEFAULT, 0).is_none());
+    }
+
+    #[test]
+    fn venue_program_ids_mirror_the_onchain_allowlist() {
+        use arb_config::program_ids::is_allowlisted_swap_program;
+        for (dex, pid) in [
+            (DexKind::RaydiumCpmm, RAYDIUM_CPMM),
+            (DexKind::OrcaWhirlpool, ORCA_WHIRLPOOL),
+            (DexKind::PumpSwapAmm, PUMPSWAP_AMM),
+        ] {
+            // The registry returns the byte-identical pinned arb-config constant...
+            assert_eq!(venue_program_id(dex), pid);
+            // ...and every venue id is in the on-chain swap allowlist.
+            assert!(is_allowlisted_swap_program(&pid), "{dex:?} not allowlisted");
+        }
     }
 }

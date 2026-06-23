@@ -102,7 +102,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 
 ### sizing
 - [x] `sizing-2` Token-2022 transfer-fee forward/inverse math *(sizing · 1d · sizing-1)*
-- [ ] 🟡 ★ `sizing-3` Quoter trait + QuoteIn/Out/SwapDir/QuoteError + venue registry *(sizing · 1d · sizing-1,2)* — math in arb-math/venue.rs; trait/registry partial
+- [x] ★ `sizing-3` Quoter trait + QuoteIn/Out/SwapDir/QuoteError + venue registry *(sizing · 1d · sizing-1,2)* — `arb-math/venue.rs`: object-safe `Quoter` (`quote_exact_in`/`quote_required_in`/`marginal_price_x64`+`approximate`); `QuoteIn`, `QuoteOut{gross_in,net_in,gross_out,net_out}` (net distinct from gross via Token-2022 `TransferFeeConfig` per side — profit-check on balance delta), `QuoteError`. `CpmmVenue::with_transfer_fees` + `dyn_round_trip_net_out(&dyn Quoter,&dyn Quoter)` proves object-safety. **M1-GATE core untouched** (concrete `RoundTrip`/`CpmmReserves::quote_out` not routed through the trait). Venue registry `sizing::venue_program_id(DexKind)→Pubkey` byte-equal the arb-config allowlist (shared test asserts `is_allowlisted_swap_program`). arb-math 28 + arb-bot 183 tests green.
 - [x] ★ `sizing-4` Raydium CP-Swap Quoter (bit-exact) *(sizing · 1.5d · sizing-3)* — impl+host-tested; bit-exactness proven only by M1-GATE
 - [ ] 🟡 `sizing-5` Orca Whirlpool Quoter (bit-exact, in-range) *(sizing · 2.5d · sizing-3)* — needs in-range tick linearization + add-6 resolver
 - [ ] 🟡 `sizing-6` PumpSwap AMM Quoter (bit-exact) *(sizing · 1d · sizing-3)*
