@@ -4,6 +4,7 @@
 //! attaches on top (detection-7).
 
 pub mod cache;
+pub mod cycle;
 pub mod decode;
 pub mod graph;
 pub mod grpc;
@@ -12,6 +13,7 @@ pub mod model;
 pub mod reconnect;
 
 pub use cache::{accept_predicate, ApplyOutcome, PoolStateCache};
+pub use cycle::{find_arbitrage_cycle, ArbitrageCycle, CycleHop};
 pub use graph::PairGraph;
 pub use grpc::{AccountUpdateSource, RawAccountUpdate};
 pub use metrics::{CacheRejectReason, DetectionMetrics, DetectionSnapshot};
@@ -91,6 +93,13 @@ impl DetectionPipeline {
     /// Slot to resubscribe from after a disconnect (see `reconnect`).
     pub fn resubscribe_from_slot(&self) -> Option<u64> {
         reconnect::resubscribe_from_slot(self.last_processed_slot)
+    }
+
+    /// detection-12: discover a profitable cycle (triangle+) over the CURRENT cached pool set.
+    /// `max_len` bounds the route length (≤ the on-chain N-leg `MAX_LEGS`). The returned cycle is
+    /// a CANDIDATE (spot-rate based) — `arb_math::size_cycle` (sizing-15) decides the exact size.
+    pub fn find_arbitrage_cycle(&self, max_len: usize) -> Option<ArbitrageCycle> {
+        cycle::find_arbitrage_cycle(&self.cache.views(), max_len)
     }
 }
 

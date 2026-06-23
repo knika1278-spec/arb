@@ -8,8 +8,11 @@
 //! the M1-GATE differential test on Surfpool/LiteSVM (which needs `cargo build-sbf`) before
 //! any mainnet send. They are isolated in `discriminators` so this is auditable.
 
+pub mod meteora_damm_v2;
+pub mod meteora_dlmm;
 pub mod orca_whirlpool;
 pub mod pumpswap;
+pub mod raydium_clmm;
 pub mod raydium_cpmm;
 
 use crate::trust::verify_swap_program;
@@ -35,6 +38,10 @@ pub fn encode_swap_data(dex: DexKind, amount_in: u64, min_out: u64) -> alloc_vec
         DexKind::RaydiumCpmm => raydium_cpmm::encode(amount_in, min_out),
         DexKind::OrcaWhirlpool => orca_whirlpool::encode(amount_in, min_out),
         DexKind::PumpSwapAmm => pumpswap::encode(amount_in, min_out),
+        // ---- Fase 2.5 (gated by M1-GATE-EXT; rejected by verify_swap_program until green) ----
+        DexKind::MeteoraDlmm => meteora_dlmm::encode(amount_in, min_out),
+        DexKind::MeteoraDammV2 => meteora_damm_v2::encode(amount_in, min_out),
+        DexKind::RaydiumClmm => raydium_clmm::encode(amount_in, min_out),
     }
 }
 

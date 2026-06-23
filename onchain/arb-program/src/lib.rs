@@ -34,4 +34,4 @@ mod entrypoint;
 
 pub use allowlist::is_allowlisted_dex;
 pub use arb_config::WAVE1_DEX_ALLOWLIST;
-pub use instruction::{LegDescriptor, TryArbitrageData};
+pub use instruction::{LegDescriptor, TryArbitrageData, TryArbitrageNData};

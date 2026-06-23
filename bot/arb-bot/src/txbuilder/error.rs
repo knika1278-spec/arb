@@ -59,6 +59,11 @@ pub enum TxBuilderError {
     #[error("leg account count {got} exceeds 255 (u8 account_count)")]
     LegTooWide { got: usize },
 
+    /// An N-leg (triangle+) route had a leg count outside `MIN_LEGS..=MAX_LEGS` (onchain-20), or
+    /// the supplied cycle-ATA count did not match the leg count.
+    #[error("N-leg route leg count {got} outside [{min}, {max}]")]
+    BadLegCount { got: usize, min: usize, max: usize },
+
     /// Predicted realized profit is below the required `min_profit` floor (costs-inclusive).
     #[error("predicted profit {predicted} below required min_profit {min_profit}")]
     BelowMinProfit { predicted: i128, min_profit: u64 },

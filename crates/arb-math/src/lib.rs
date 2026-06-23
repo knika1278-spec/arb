@@ -13,11 +13,15 @@
 #![forbid(unsafe_code)]
 
 pub mod cpmm;
+pub mod cycle;
+pub mod damm_v2;
+pub mod dlmm;
 pub mod fees;
 pub mod mul_div;
 #[cfg(feature = "std")]
 pub mod optimal;
 pub mod policy;
+pub mod raydium_clmm;
 pub mod rounding;
 pub mod search;
 pub mod u256;
@@ -26,9 +30,13 @@ pub mod whirlpool;
 
 // Curated public surface.
 pub use cpmm::{opportunity_exists, quote_out, required_in, CpmmReserves, RoundTrip};
+pub use cycle::{cycle_net_out, cycle_opportunity_exists, cycle_profit, size_cycle, CycleLeg};
+pub use damm_v2::{DammV2Error, DammV2Pool, DammV2Quote};
+pub use dlmm::{DlmmActiveBin, DlmmError, DlmmQuote};
 pub use fees::TransferFeeConfig;
 pub use mul_div::{mul_div_ceil, mul_div_floor};
 pub use policy::SizingPolicy;
+pub use raydium_clmm::{RaydiumClmmError, RaydiumClmmPool, RaydiumClmmQuote};
 pub use rounding::RoundDirection;
 pub use search::optimal_delta_search;
 pub use u256::U256;

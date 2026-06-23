@@ -3,19 +3,26 @@
 //! base, and sizes it at the 90–95% policy. Dependency-free of `detection` (the contract is
 //! one-way: detection → sizing), so the caller maps `PoolQuote → PoolRef`.
 
-use arb_config::program_ids::{ORCA_WHIRLPOOL, PUMPSWAP_AMM, RAYDIUM_CPMM};
+use arb_config::program_ids::{
+    METEORA_DAMM_V2, METEORA_DLMM, ORCA_WHIRLPOOL, PUMPSWAP_AMM, RAYDIUM_CLMM, RAYDIUM_CPMM,
+};
 use arb_math::{size_round_trip, CpmmReserves, RoundTrip, SizingPolicy};
 use arb_types::{DexKind, SwapDir};
 use solana_pubkey::Pubkey;
 
 /// sizing-3 venue registry: the on-chain swap program id for a venue, byte-equal to the pinned
-/// `arb-config` allowlist. The registry MIRRORS (never redefines) the on-chain trust boundary, so
+/// `arb-config` constants. The registry MIRRORS (never redefines) the on-chain trust boundary, so
 /// a quoted venue and the program the tx-builder is allowed to invoke can never drift apart.
+/// Wave-1 venues resolve into [`arb_config::is_allowlisted_swap_program`]; the Fase-2.5 venues
+/// (tags 3–5) resolve into the gated [`arb_config::is_fase25_swap_program`] set instead.
 pub fn venue_program_id(dex: DexKind) -> Pubkey {
     match dex {
         DexKind::RaydiumCpmm => RAYDIUM_CPMM,
         DexKind::OrcaWhirlpool => ORCA_WHIRLPOOL,
         DexKind::PumpSwapAmm => PUMPSWAP_AMM,
+        DexKind::MeteoraDlmm => METEORA_DLMM,
+        DexKind::MeteoraDammV2 => METEORA_DAMM_V2,
+        DexKind::RaydiumClmm => RAYDIUM_CLMM,
     }
 }
 
