@@ -21,6 +21,10 @@ use arb_types::{DexKind, SwapDir};
 /// `2^64` — the Q64.64 fixed-point scale for [`Quoter::marginal_price_x64`].
 const Q64: u128 = 0x1_0000_0000_0000_0000;
 
+/// PumpSwap quotes its fees in basis points (denominator `1e4`); the total swap fee is the sum of
+/// the lp + protocol + coin-creator bps (sizing-6 / mirrors `detection::decode`).
+pub const PUMPSWAP_FEE_DENOMINATOR: u64 = 10_000;
+
 /// Inputs to a single-leg exact-in quote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuoteIn {
@@ -118,6 +122,36 @@ impl CpmmVenue {
             fee_in,
             fee_out,
         }
+    }
+
+    /// PumpSwap AMM venue (sizing-6): a constant-product pool whose TOTAL swap fee is the sum of the
+    /// lp + protocol + coin-creator basis points, combined ONCE and applied to the input pre-swap
+    /// over the [`PUMPSWAP_FEE_DENOMINATOR`] (1e4) — exactly the on-chain order. Returns `None` if
+    /// the summed fee overflows or is not a valid fraction (`>= denominator`). `base`/`quote` are
+    /// the pool's two vault reserves; orient the `SwapDir` so the input side is `reserve_a`.
+    pub fn pumpswap(
+        reserve_base: u64,
+        reserve_quote: u64,
+        lp_fee_bps: u64,
+        protocol_fee_bps: u64,
+        coin_creator_fee_bps: u64,
+    ) -> Option<Self> {
+        // Combine the three fee components ONCE (checked — arb-math forbids silent overflow).
+        let total_bps = lp_fee_bps
+            .checked_add(protocol_fee_bps)?
+            .checked_add(coin_creator_fee_bps)?;
+        if total_bps >= PUMPSWAP_FEE_DENOMINATOR {
+            return None;
+        }
+        Some(Self::new(
+            DexKind::PumpSwapAmm,
+            CpmmReserves::new(
+                reserve_base,
+                reserve_quote,
+                total_bps,
+                PUMPSWAP_FEE_DENOMINATOR,
+            ),
+        ))
     }
 
     #[inline]
@@ -343,5 +377,46 @@ mod tests {
             dyn_round_trip_net_out(leg_a, SwapDir::AtoB, leg_b, SwapDir::AtoB, 5_000).unwrap();
         // A small size on this dislocated pair returns more base than was put in (profit).
         assert!(out > 5_000, "round-trip net out {out} should exceed input");
+    }
+
+    #[test]
+    fn pumpswap_combines_fee_once_and_matches_cp_both_directions() {
+        // 20 lp + 5 protocol + 5 coin-creator = 30 bps total, applied ONCE pre-swap (1e4 denom).
+        let v = CpmmVenue::pumpswap(1_000_000, 2_000_000, 20, 5, 5).unwrap();
+        assert_eq!(v.dex(), DexKind::PumpSwapAmm);
+        assert!(!v.approximate()); // pure CP, bit-exact
+
+        // Reference: a single 30-bps constant-product application (the bit-exact cpmm path).
+        let reference = CpmmReserves::new(1_000_000, 2_000_000, 30, PUMPSWAP_FEE_DENOMINATOR);
+        for dir in [SwapDir::AtoB, SwapDir::BtoA] {
+            let out = v
+                .quote_exact_in(QuoteIn {
+                    dir,
+                    amount_in: 10_000,
+                })
+                .unwrap();
+            assert_eq!(out.gross_out, reference.quote_out(dir, 10_000).unwrap());
+            assert_eq!(out.net_out, out.gross_out); // plain SPL: no Token-2022 skim
+        }
+
+        // Concrete fixture (AtoB): in_after_fee = floor(10000*9970/10000)=9970,
+        // out = floor(2_000_000*9970 / (1_000_000+9970)) = floor(19_940_000_000/1_009_970) = 19_743.
+        let a = v
+            .quote_exact_in(QuoteIn {
+                dir: SwapDir::AtoB,
+                amount_in: 10_000,
+            })
+            .unwrap();
+        assert_eq!(a.gross_out, 19_743);
+
+        // Double-applying the combined fee (a classic bug) would lower the output — guard it.
+        let double_fee = CpmmReserves::new(1_000_000, 2_000_000, 60, PUMPSWAP_FEE_DENOMINATOR);
+        assert!(a.gross_out > double_fee.quote_out(SwapDir::AtoB, 10_000).unwrap());
+    }
+
+    #[test]
+    fn pumpswap_rejects_degenerate_total_fee() {
+        // Summed fee >= denominator is not a valid fraction.
+        assert!(CpmmVenue::pumpswap(1_000, 1_000, 5_000, 5_000, 1).is_none());
     }
 }
