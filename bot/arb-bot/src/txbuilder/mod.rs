@@ -20,6 +20,7 @@ pub mod layout;
 pub mod limits;
 pub mod message;
 pub mod preflight;
+pub mod sellsim;
 pub mod tip;
 pub mod token2022;
 pub mod vet;
@@ -31,7 +32,14 @@ pub use error::TxBuilderError;
 pub use layout::{build_arb_instruction, LegAccounts};
 pub use limits::{measure, AltView, LimitReport};
 pub use message::compile_v0_message;
-pub use preflight::{evaluate as evaluate_preflight, PreflightOk, SimOutcome, SimulateRpc};
+pub use preflight::{
+    decode_revert, evaluate as evaluate_preflight, preflight_simulate, PreflightOk, SimOutcome,
+    SimulateRpc,
+};
+pub use sellsim::{
+    classify_sell, run_sell_sim_gate, SellSimError, SellSimPolicy, SellSimResult, SellSimulator,
+    SellVerdict,
+};
 pub use tip::{build_capped_tip_ix, jito_tip_ix, tip_cap};
 pub use token2022::Token2022Filter;
 pub use vet::{vet_route, RouteVetInput};

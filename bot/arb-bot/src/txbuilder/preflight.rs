@@ -74,6 +74,27 @@ pub fn evaluate(outcome: SimOutcome, min_profit: u64) -> Result<PreflightOk, TxB
     })
 }
 
+/// Decode a simulation revert code into the shared [`arb_types::ArbError`] when it is one of the
+/// arb-program's own 6000-based codes. `None` ⇒ the custom code came from a venue CPI (not our
+/// terminal assert), so the revert is a venue/route problem, not a profit/trust-boundary failure.
+pub fn decode_revert(code: u32) -> Option<arb_types::ArbError> {
+    arb_types::ArbError::from_code(code)
+}
+
+/// Preflight `simulateTransaction` wrapper (txbuilder-7): run the simulation over the [`SimulateRpc`]
+/// seam, then [`evaluate`] the outcome in one call so a caller can never simulate-without-checking.
+/// A revert (any custom code) and a below-`min_profit` realized delta both surface as a
+/// [`TxBuilderError`]; on success the measured CU + realized profit come back for the next rebuild.
+pub fn preflight_simulate(
+    rpc: &dyn SimulateRpc,
+    instructions: &[Instruction],
+    signers: &[Pubkey],
+    min_profit: u64,
+) -> Result<PreflightOk, TxBuilderError> {
+    let outcome = rpc.simulate(instructions, signers)?;
+    evaluate(outcome, min_profit)
+}
+
 /// Host mock returning a canned outcome (test substrate until the RPC client lands).
 pub struct MockSimulator {
     pub outcome: SimOutcome,
@@ -147,5 +168,62 @@ mod tests {
         };
         let out = sim.simulate(&[], &[]).unwrap();
         assert_eq!(out.base_post, 25);
+    }
+
+    #[test]
+    fn preflight_simulate_wraps_simulate_then_evaluate() {
+        // Profitable mock => Ok with the realized delta + measured CU, in one call.
+        let ok = MockSimulator {
+            outcome: SimOutcome {
+                units_consumed: 111_000,
+                base_pre: 1_000,
+                base_post: 1_800,
+                err_code: None,
+            },
+        };
+        let r = preflight_simulate(&ok, &[], &[], 500).unwrap();
+        assert_eq!(r.realized_profit, 800);
+        assert_eq!(r.units_consumed, 111_000);
+
+        // Reverting mock => the wrapper surfaces SimulationReverted (never an Ok the caller could
+        // forget to check).
+        let reverted = MockSimulator {
+            outcome: SimOutcome {
+                units_consumed: 10_000,
+                base_pre: 1_000,
+                base_post: 1_000,
+                err_code: Some(6010),
+            },
+        };
+        assert_eq!(
+            preflight_simulate(&reverted, &[], &[], 1).unwrap_err(),
+            TxBuilderError::SimulationReverted { code: Some(6010) }
+        );
+
+        // Profit below the floor => BelowMinProfit.
+        let thin = MockSimulator {
+            outcome: SimOutcome {
+                units_consumed: 90_000,
+                base_pre: 1_000,
+                base_post: 1_050,
+                err_code: None,
+            },
+        };
+        assert_eq!(
+            preflight_simulate(&thin, &[], &[], 100).unwrap_err(),
+            TxBuilderError::BelowMinProfit {
+                predicted: 50,
+                min_profit: 100
+            }
+        );
+    }
+
+    #[test]
+    fn decode_revert_maps_arb_program_codes() {
+        use arb_types::ArbError;
+        assert_eq!(decode_revert(6000), Some(ArbError::Unprofitable));
+        assert_eq!(decode_revert(6010), Some(ArbError::RouteDoesNotClose));
+        // A custom code outside the arb-program range is a venue-CPI revert, not one of ours.
+        assert_eq!(decode_revert(1), None);
     }
 }

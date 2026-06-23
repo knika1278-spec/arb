@@ -1,10 +1,11 @@
 //! landing-8 — the `Executor::land` facade: orchestrate the pre-sign gates and the landing loop.
 //!
-//! Order (plan §6 / §9): kill-switch check → probabilistic cost-gate → writable-account dedupe
-//! (add-1) → tip sizing → landing loop → record outcome into the metrics pipeline. The signer's
-//! `signing-enabled` flag is checked before any work, and the routing-exclusivity invariant is
-//! enforced when a fallback route is chosen. The actual sign + network submit live behind the
-//! [`SignerHandle`] / [`LandingTransport`] seams.
+//! Order (plan §6 / §9): kill-switch → tip sizing → probabilistic cost-gate (scored on the sized
+//! tip) → writable-account dedupe (add-1) → route select → pre-tip simulation gate (landing-5) →
+//! landing loop → record outcome into the metrics pipeline. The signer's `signing-enabled` flag is
+//! checked before any work, and the routing-exclusivity invariant is enforced when a fallback route
+//! is chosen. The actual sign + network submit (and the pre-tip simulator) live behind the
+//! [`SignerHandle`] / [`LandingTransport`] / [`super::presim::PreTipSimulator`] seams.
 
 use solana_pubkey::Pubkey;
 
@@ -14,6 +15,7 @@ use crate::metrics::types::RevertCause;
 
 use super::config::ExecutorConfig;
 use super::landing_loop::{run_landing_loop, BlockhashSource, LandingTransport};
+use super::presim::{run_pre_tip_gate, PreTipReject, PreTipSimulator};
 use super::registry::WritableAccountRegistry;
 use super::tip::TipOracle;
 use super::types::{ArbTxSpec, DropCause, LandingOutcome, Route};
@@ -31,6 +33,9 @@ pub struct LandRequest {
     pub spec: ArbTxSpec,
     /// Economic terms for the synchronous cost-gate.
     pub cost_inputs: CostInputs,
+    /// Costs-inclusive base-asset profit floor the pre-tip simulation gate (landing-5) checks the
+    /// simulated realized delta against — the SAME value embedded in the on-chain assert (dec-3).
+    pub min_profit_lamports: u64,
     /// Auction competition in `[0,1]` (lerps the tip toward p75).
     pub competition: f64,
     pub now_millis: u64,
@@ -49,6 +54,8 @@ pub enum LandError {
     TipUnviable,
     /// A jitodontfront tx was about to leave via a non-Jito route (routing-exclusivity).
     RoutingExclusivityViolation,
+    /// landing-5: the pre-tip simulation gate refused (revert / unprofitable / sim unavailable).
+    SimulationFailed(PreTipReject),
 }
 
 /// All the seams `land` needs.
@@ -61,6 +68,9 @@ pub struct LandDeps<'a> {
     pub registry: &'a WritableAccountRegistry,
     pub metrics: &'a MetricsRegistry,
     pub config: &'a ExecutorConfig,
+    /// landing-5 pre-tip simulation gate. `None` disables the gate (the on-chain assert stays the
+    /// final net); `Some` runs `simulateTransaction`/`simulateBundle` before the loop ever submits.
+    pub sim: Option<&'a dyn PreTipSimulator>,
 }
 
 fn drop_cause_to_revert_cause(c: DropCause) -> RevertCause {
@@ -134,6 +144,21 @@ pub fn land(deps: &LandDeps, req: &LandRequest) -> Result<LandingOutcome, LandEr
             .unwrap_or(&super::types::Region::Frankfurt),
     };
     let route = select_route(deps.config, true, default_route)?;
+
+    // 5.5 landing-5 — pre-tip simulation gate. Simulate the assembled tx (tip riding inside,
+    // invariant #10) and refuse to submit if it would revert or come back below the costs-inclusive
+    // floor: a doomed tx then burns no priority/base and a reverting tx pays no tip (plan §2). The
+    // contention guard is still held, so a rejected opportunity releases its pool lock on return.
+    // Skipped when no simulator is wired (gate optional; the on-chain assert remains the final net).
+    if let Some(sim) = deps.sim {
+        if let Err(reject) = run_pre_tip_gate(sim, &req.spec, tip.lamports, req.min_profit_lamports)
+        {
+            // Pre-inclusion drop: the tx is never submitted ⇒ zero burned.
+            deps.metrics
+                .record_revert(drop_cause_to_revert_cause(reject.drop_cause()), 0);
+            return Err(LandError::SimulationFailed(reject));
+        }
+    }
 
     // 6. Landing loop.
     deps.metrics.record_attempt();
@@ -252,12 +277,13 @@ mod tests {
                 alt_tables: vec![],
             },
             cost_inputs: good_inputs(),
+            min_profit_lamports: 0,
             competition: 0.0,
             now_millis: 0,
         }
     }
 
-    #[allow(clippy::too_many_arguments)] // test-only assembly of the 8 borrowed seams
+    #[allow(clippy::too_many_arguments)] // test-only assembly of the borrowed seams
     fn deps<'a>(
         signer: &'a EnabledSigner,
         src: &'a Src,
@@ -277,6 +303,33 @@ mod tests {
             registry: reg,
             metrics,
             config,
+            sim: None,
+        }
+    }
+
+    /// Same as [`deps`] but with a pre-tip simulator wired (landing-5).
+    #[allow(clippy::too_many_arguments)]
+    fn deps_with_sim<'a>(
+        signer: &'a EnabledSigner,
+        src: &'a Src,
+        transport: &'a dyn LandingTransport,
+        oracle: &'a TipOracle,
+        cost: &'a CostModel,
+        reg: &'a WritableAccountRegistry,
+        metrics: &'a MetricsRegistry,
+        config: &'a ExecutorConfig,
+        sim: &'a dyn PreTipSimulator,
+    ) -> LandDeps<'a> {
+        LandDeps {
+            signer,
+            source: src,
+            transport,
+            tip_oracle: oracle,
+            cost_model: cost,
+            registry: reg,
+            metrics,
+            config,
+            sim: Some(sim),
         }
     }
 
@@ -406,6 +459,7 @@ mod tests {
                 base_lamports: 5_000,
                 p_land: 0.8,
             },
+            min_profit_lamports: 0,
             competition: 1.0, // => sized tip rides to p75 = 20_000
             now_millis: 0,
         };
@@ -416,5 +470,127 @@ mod tests {
             land(&d, &req).unwrap_err(),
             LandError::CostGateRejected(RejectReason::TipExceedsProfitFraction)
         ));
+    }
+
+    // --- landing-5: pre-tip simulation gate ---
+
+    use crate::executor::presim::{PreTipReject, PreTipSimResult, PreTipSimulator};
+
+    /// A simulator returning a canned result (or a transport error).
+    struct CannedSim(Result<PreTipSimResult, DropCause>);
+    impl PreTipSimulator for CannedSim {
+        fn simulate(
+            &self,
+            _spec: &ArbTxSpec,
+            _tip_lamports: u64,
+        ) -> Result<PreTipSimResult, DropCause> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn pre_tip_gate_blocks_reverting_sim_before_submit() {
+        let signer = EnabledSigner(true, Pubkey::new_from_array([1; 32]));
+        let src = Src::default();
+        let o = oracle();
+        let cost = CostModel::new(EconParams::default());
+        let reg = WritableAccountRegistry::new();
+        let m = MetricsRegistry::new();
+        let cfg = ExecutorConfig::default();
+        // Sim says the assembled tx reverts (on-chain Unprofitable assert).
+        let sim = CannedSim(Ok(PreTipSimResult {
+            revert_code: Some(6000),
+            realized_profit_lamports: 0,
+            units_consumed: 9_000,
+        }));
+        let d = deps_with_sim(&signer, &src, &LandFirst, &o, &cost, &reg, &m, &cfg, &sim);
+        let pool = Pubkey::new_from_array([7; 32]);
+        let err = land(&d, &request(vec![pool])).unwrap_err();
+        assert_eq!(
+            err,
+            LandError::SimulationFailed(PreTipReject::Reverted { code: Some(6000) })
+        );
+        // Never submitted: no attempt, no land, a SimFail revert with zero burn, lock released.
+        let s = m.snapshot();
+        assert_eq!(s.attempts, 0);
+        assert_eq!(s.lands, 0);
+        assert_eq!(s.burned_lamports, 0);
+        assert_eq!(m.revert_cause_count(RevertCause::SimFail), 1);
+        assert_eq!(reg.inflight_count(), 0);
+    }
+
+    #[test]
+    fn pre_tip_gate_blocks_unprofitable_sim() {
+        let signer = EnabledSigner(true, Pubkey::new_from_array([1; 32]));
+        let src = Src::default();
+        let o = oracle();
+        let cost = CostModel::new(EconParams::default());
+        let reg = WritableAccountRegistry::new();
+        let m = MetricsRegistry::new();
+        let cfg = ExecutorConfig::default();
+        // Sim clears on-chain but the realized delta (400) is below the request floor (1_000).
+        let sim = CannedSim(Ok(PreTipSimResult {
+            revert_code: None,
+            realized_profit_lamports: 400,
+            units_consumed: 150_000,
+        }));
+        let d = deps_with_sim(&signer, &src, &LandFirst, &o, &cost, &reg, &m, &cfg, &sim);
+        let mut req = request(vec![]);
+        req.min_profit_lamports = 1_000;
+        assert!(matches!(
+            land(&d, &req).unwrap_err(),
+            LandError::SimulationFailed(PreTipReject::Unprofitable {
+                realized: 400,
+                min_profit: 1_000
+            })
+        ));
+        assert_eq!(m.revert_cause_count(RevertCause::SimFail), 1);
+    }
+
+    #[test]
+    fn pre_tip_gate_passes_profitable_sim_and_lands() {
+        let signer = EnabledSigner(true, Pubkey::new_from_array([1; 32]));
+        let src = Src::default();
+        let o = oracle();
+        let cost = CostModel::new(EconParams::default());
+        let reg = WritableAccountRegistry::new();
+        let m = MetricsRegistry::new();
+        let cfg = ExecutorConfig::default();
+        let sim = CannedSim(Ok(PreTipSimResult {
+            revert_code: None,
+            realized_profit_lamports: 500_000,
+            units_consumed: 180_000,
+        }));
+        let d = deps_with_sim(&signer, &src, &LandFirst, &o, &cost, &reg, &m, &cfg, &sim);
+        let outcome = land(&d, &request(vec![Pubkey::new_from_array([7; 32])])).unwrap();
+        assert!(matches!(outcome, LandingOutcome::Landed { .. }));
+        let s = m.snapshot();
+        assert_eq!(s.attempts, 1);
+        assert_eq!(s.lands, 1);
+        assert_eq!(m.revert_cause_count(RevertCause::SimFail), 0);
+    }
+
+    #[test]
+    fn pre_tip_gate_unavailable_fails_closed_with_forwarded_cause() {
+        let signer = EnabledSigner(true, Pubkey::new_from_array([1; 32]));
+        let src = Src::default();
+        let o = oracle();
+        let cost = CostModel::new(EconParams::default());
+        let reg = WritableAccountRegistry::new();
+        let m = MetricsRegistry::new();
+        let cfg = ExecutorConfig::default();
+        // The simulator transport is down — fail-closed (drop), do NOT send blind.
+        let sim = CannedSim(Err(DropCause::RateLimited));
+        let d = deps_with_sim(&signer, &src, &LandFirst, &o, &cost, &reg, &m, &cfg, &sim);
+        let err = land(&d, &request(vec![])).unwrap_err();
+        assert_eq!(
+            err,
+            LandError::SimulationFailed(PreTipReject::Unavailable {
+                cause: DropCause::RateLimited
+            })
+        );
+        // RateLimited maps to RevertCause::Congestion (transport-congestion class), zero burn.
+        assert_eq!(m.snapshot().attempts, 0);
+        assert_eq!(m.revert_cause_count(RevertCause::Congestion), 1);
     }
 }
