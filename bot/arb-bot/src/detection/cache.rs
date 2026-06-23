@@ -30,6 +30,24 @@ pub fn accept_predicate(current: Option<SessionStamp>, incoming: SessionStamp) -
     }
 }
 
+/// Outcome of applying a streamed update — accepted, or dropped with the dedupe reason (so the
+/// caller can attribute `cache_rejected_total{reason}`, detection-8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    /// The update was strictly newer and replaced the cached state.
+    Accepted,
+    /// Dropped: strictly older slot than the cached state.
+    RejectedStale,
+    /// Dropped: same-or-not-newer `(slot, write_version)` — a duplicate of an applied write.
+    RejectedDuplicate,
+}
+
+impl ApplyOutcome {
+    pub fn accepted(self) -> bool {
+        matches!(self, ApplyOutcome::Accepted)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CachedPool {
     stamp: SessionStamp,
@@ -50,12 +68,29 @@ impl PoolStateCache {
     /// Apply an update; returns `true` if it was accepted (state changed), `false` if it was
     /// a stale/duplicate drop.
     pub fn apply(&mut self, pool: Pubkey, stamp: SessionStamp, view: PriceView) -> bool {
+        self.apply_classified(pool, stamp, view).accepted()
+    }
+
+    /// Apply an update, returning the [`ApplyOutcome`] so a drop can be attributed to a stale slot
+    /// vs a duplicate write (`cache_rejected_total{reason}`). Same accept rule as [`Self::apply`].
+    pub fn apply_classified(
+        &mut self,
+        pool: Pubkey,
+        stamp: SessionStamp,
+        view: PriceView,
+    ) -> ApplyOutcome {
         let current = self.pools.get(&pool).map(|c| c.stamp);
         if accept_predicate(current, stamp) {
             self.pools.insert(pool, CachedPool { stamp, view });
-            true
+            ApplyOutcome::Accepted
         } else {
-            false
+            // A drop is either a strictly-older slot (stale) or a same-slot not-newer write
+            // (duplicate); cross-session drops are always strictly-older-slot, so the slot test
+            // classifies both session cases.
+            match current {
+                Some(cur) if stamp.slot < cur.slot => ApplyOutcome::RejectedStale,
+                _ => ApplyOutcome::RejectedDuplicate,
+            }
         }
     }
 

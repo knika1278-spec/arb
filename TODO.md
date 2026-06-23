@@ -162,7 +162,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 ### onchain / detection / txbuilder
 - [ ] 🟡 `onchain-12` PumpSwap AMM adapter (Fase 2 venue) *(onchain · 3d · onchain-8,10)* — placeholder; needs verified account layout/discriminators 🔒
 - [ ] 🔒 `onchain-13` Deploy upgradeable + publish verifiable build (Squads authority) *(onchain · 2d · onchain-11, scaffold-12)*
-- [ ] `detection-8` Detection metrics + latency instrumentation *(detection · 1.5d · detection-7, observ-2)*
+- [x] `detection-8` Detection metrics + latency instrumentation *(detection · 1.5d · detection-7, observ-2)* — `detection/metrics.rs` `DetectionMetrics` (lock-free `AtomicU64`): `updates_total`, `cache_rejected_total{StaleSlot,Duplicate}`, `reconnects_total`, `gap_reconciles_total`, `decode_errors_total{venue}` (per-`DexKind`), hot/stale-pool gauges, **ingest→edge latency histogram P50/P95** (reuses observ-2 `Histogram`, now `pub`). `cache::apply_classified`→`ApplyOutcome` attributes the dedupe reason; `DetectionPipeline::on_pool_update_metered` wires it live. Field-struct ⇒ no duplicate-registration panic. Integration test increments per-venue decode-error on a real bad-discriminator buffer.
 - [ ] `detection-9` Fase-2 targeted subscription sizing (20-50 pairs) + PumpSwap integration *(detection · 2.5d · detection-3,7)*
 - [x] `txbuilder-13` Jito tip instruction (Fase 2 seam) + tip capping *(txbuilder · 1.5d · txbuilder-5)* — `jito_tip_ix` (System transfer inside the atomic tx) + `build_capped_tip_ix` (rejects tip > cap_frac·profit)
 - [ ] `txbuilder-14` PumpSwap AMM venue support in builder/vet *(txbuilder · 1.5d · txbuilder-11)*

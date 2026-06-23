@@ -7,12 +7,14 @@ pub mod cache;
 pub mod decode;
 pub mod graph;
 pub mod grpc;
+pub mod metrics;
 pub mod model;
 pub mod reconnect;
 
-pub use cache::{accept_predicate, PoolStateCache};
+pub use cache::{accept_predicate, ApplyOutcome, PoolStateCache};
 pub use graph::PairGraph;
 pub use grpc::{AccountUpdateSource, RawAccountUpdate};
+pub use metrics::{CacheRejectReason, DetectionMetrics, DetectionSnapshot};
 pub use model::{canonical_pair, DetectionSignal, EdgeUpdate, PoolQuote, PriceView, SessionStamp};
 
 use solana_pubkey::Pubkey;
@@ -48,6 +50,42 @@ impl DetectionPipeline {
         self.graph
             .on_event(pool, view)
             .map(DetectionSignal::EdgeUpdated)
+    }
+
+    /// Instrumented [`Self::on_pool_update`] (detection-8): records the accepted-update count and
+    /// the ingest→edge latency on accept, or attributes the dedupe drop to `cache_rejected_total`
+    /// `{reason}`. `ingest_us` is the measured ingest→edge-recompute span for this update.
+    pub fn on_pool_update_metered(
+        &mut self,
+        pool: Pubkey,
+        stamp: SessionStamp,
+        view: PriceView,
+        metrics: &DetectionMetrics,
+        ingest_us: f64,
+    ) -> Option<DetectionSignal> {
+        match self.cache.apply_classified(pool, stamp, view) {
+            ApplyOutcome::Accepted => {
+                metrics.record_update();
+                self.last_processed_slot = Some(
+                    self.last_processed_slot
+                        .map_or(stamp.slot, |s| s.max(stamp.slot)),
+                );
+                let signal = self
+                    .graph
+                    .on_event(pool, view)
+                    .map(DetectionSignal::EdgeUpdated);
+                metrics.record_ingest_to_edge_us(ingest_us);
+                signal
+            }
+            ApplyOutcome::RejectedStale => {
+                metrics.record_cache_reject(CacheRejectReason::StaleSlot);
+                None
+            }
+            ApplyOutcome::RejectedDuplicate => {
+                metrics.record_cache_reject(CacheRejectReason::Duplicate);
+                None
+            }
+        }
     }
 
     /// Slot to resubscribe from after a disconnect (see `reconnect`).
@@ -108,5 +146,56 @@ mod tests {
             p.cache.snapshot_pool(&pool).unwrap().reserves.reserve_b,
             1_000
         );
+    }
+
+    #[test]
+    fn metered_pipeline_counts_updates_rejects_and_decode_errors() {
+        let mut p = DetectionPipeline::new();
+        let m = DetectionMetrics::new();
+        let pool = Pubkey::new_from_array([10; 32]);
+
+        // Accept a fresh update => updates_total + an ingest→edge sample.
+        assert!(p
+            .on_pool_update_metered(
+                pool,
+                SessionStamp::new(1, 100, 0),
+                view(1_000, 1_000, 100),
+                &m,
+                250.0
+            )
+            .is_none());
+        // Strictly older slot => RejectedStale.
+        assert!(p
+            .on_pool_update_metered(
+                pool,
+                SessionStamp::new(1, 99, 0),
+                view(1_000, 2_000, 99),
+                &m,
+                250.0
+            )
+            .is_none());
+        // Same (slot, write_version) => RejectedDuplicate.
+        assert!(p
+            .on_pool_update_metered(
+                pool,
+                SessionStamp::new(1, 100, 0),
+                view(1_000, 1_000, 100),
+                &m,
+                250.0
+            )
+            .is_none());
+
+        let s = m.snapshot();
+        assert_eq!(s.updates_total, 1);
+        assert_eq!(m.cache_reject_count(CacheRejectReason::StaleSlot), 1);
+        assert_eq!(m.cache_reject_count(CacheRejectReason::Duplicate), 1);
+        assert_eq!(s.cache_rejected_total, 2);
+        assert_eq!(m.ingest_to_edge_count(), 1);
+
+        // Per-venue decode-error increments on a bad-discriminator buffer (the REAL decoder).
+        let bad = [0u8; 700];
+        assert!(crate::detection::decode::decode_whirlpool(&bad).is_none());
+        m.record_decode_error(DexKind::OrcaWhirlpool);
+        assert_eq!(m.decode_error_count(DexKind::OrcaWhirlpool), 1);
     }
 }

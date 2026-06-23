@@ -66,8 +66,11 @@ pub struct ConfirmationRank {
     pub index_in_block: u32,
 }
 
+/// Lock-free exponential-bucket latency histogram (≈2% bucket width). Reused by [`LatencyBook`]
+/// (the land-path stages) and by the detection ingest→edge book (detection-8) so both share one
+/// audited quantile implementation rather than duplicating the bucketing.
 #[derive(Debug)]
-struct Histogram {
+pub struct Histogram {
     buckets: Vec<AtomicU64>,
 }
 
@@ -80,8 +83,22 @@ impl Default for Histogram {
 }
 
 impl Histogram {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// P50 in milliseconds (`None` with no samples).
+    pub fn p50_ms(&self) -> Option<f64> {
+        self.quantile_us(0.50).map(|us| us / 1000.0)
+    }
+
+    /// P95 in milliseconds (`None` with no samples).
+    pub fn p95_ms(&self) -> Option<f64> {
+        self.quantile_us(0.95).map(|us| us / 1000.0)
+    }
+
     #[inline]
-    fn record_us(&self, us: f64) {
+    pub fn record_us(&self, us: f64) {
         let idx = if us <= MIN_US {
             0
         } else {
@@ -121,7 +138,7 @@ impl Histogram {
         Some(MIN_US * FACTOR.powi(N_BUCKETS as i32))
     }
 
-    fn count(&self) -> u64 {
+    pub fn count(&self) -> u64 {
         self.buckets.iter().map(|b| b.load(Ordering::Relaxed)).sum()
     }
 }
