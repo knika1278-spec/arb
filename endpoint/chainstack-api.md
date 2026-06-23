@@ -33,6 +33,8 @@ Real calls against the provisioned node (`solana-mainnet.core.chainstack.com`), 
   `yellowstone-grpc-client` Rust crate to the matching 13.x/proto-12.x line.
 - Method: `curl` (RPC) · python `websockets` (WSS) · python `grpcio` against the compiled geyser proto
   (`GetVersion` unary + `Subscribe` stream).
+- **Re-run anytime:** `bash tests/scripts/chainstack_smoke.sh` (RPC = authoritative/non-zero-exit on
+  failure; gRPC TLS+h2 reachability + WSS slot stream = informational). Reads `.env` (CRLF-safe).
 
 ---
 
