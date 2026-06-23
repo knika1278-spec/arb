@@ -196,7 +196,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 - [x] `observ-11` Golden-replay regression gate (predicted vs realized) — CI-blocking *(observ · 2.5d · observ-10,4)* — `analytics gate` reuses arb-math mirror + CostModel, nonzero exit on drift; verified end-to-end at 0 bps
 - [x] `observ-12` Aggregate backtest + unit-economics confirmation report *(observ · 1.5d · observ-10,4,5)* — `analytics backtest`: predicted vs realized E[net], revert-rate, burn, model bias
 - [x] `observ-13` Grafana dashboard + deviation alert rules *(observ · 1d · observ-7,9)* — `analytics/dashboards/grafana-arbit-health.json`: revert-rate(30% line+alert), burn-rate, P50/P95, PnL, confirmation, slippage panels (valid JSON, exporter metric names)
-- [ ] `observ-14` Wire cost-gate into signer pre-sign + health into kill-switch (integration seam) *(observ · 1.5d · observ-4,6, signer-5,7)*
+- [x] `observ-14` Wire cost-gate into signer pre-sign + health into kill-switch (integration seam) *(observ · 1.5d · observ-4,6, signer-5,7)* — `signer/presign.rs`: `PreSignGate`/`evaluate_pre_sign` runs the signer-owned flag (`KillSwitchHandle`) THEN the metrics-owned `CostModel::gate` synchronously pre-sign; health→flag route reuses signer-7 `apply_health_signal`. Contract doc'd (metrics owns gate+signal LOGIC, signer owns flag+cap STATE, no duplication). Integration tests: EV-negative `CostInputs` rejected before a fake signer is touched; simulated >30% revert-rate spike → `HealthEvaluator`→`Trip`→supervisor flips `signing-enabled=false`→pre-sign returns `Halted`; flag-checked-before-gate ordering.
 
 ---
 

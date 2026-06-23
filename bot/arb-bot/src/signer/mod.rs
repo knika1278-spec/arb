@@ -16,6 +16,7 @@ pub mod error;
 pub mod keychain;
 pub mod killswitch;
 pub mod metrics;
+pub mod presign;
 pub mod sidecar;
 pub mod sweeper;
 pub mod validate;
@@ -24,6 +25,7 @@ pub use alert::{AlertMessage, AlertSink, LogSink, Severity};
 pub use caps::{BalanceSnapshot, CapExceeded, CapReservation, PreSignCaps};
 pub use error::SignerError;
 pub use keychain::{BackendKind, MemorySigner, SolanaSigner};
+pub use presign::{evaluate_pre_sign, PreSignDecision, PreSignGate};
 pub use killswitch::{
     apply_health_signal, halt_reason_from_signal, HaltReason, KillSwitchHandle, RearmError,
     TripRecord,
