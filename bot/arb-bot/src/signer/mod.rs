@@ -25,12 +25,12 @@ pub use alert::{AlertMessage, AlertSink, LogSink, Severity};
 pub use caps::{BalanceSnapshot, CapExceeded, CapReservation, PreSignCaps};
 pub use error::SignerError;
 pub use keychain::{BackendKind, MemorySigner, SolanaSigner};
-pub use presign::{evaluate_pre_sign, PreSignDecision, PreSignGate};
 pub use killswitch::{
     apply_health_signal, halt_reason_from_signal, HaltReason, KillSwitchHandle, RearmError,
     TripRecord,
 };
 pub use metrics::SignerMetrics;
+pub use presign::{evaluate_pre_sign, PreSignDecision, PreSignGate};
 pub use sidecar::SignerSidecar;
 pub use sweeper::{decide_sweep, SweepDecision, SweepTrigger, SweeperConfig};
 pub use validate::{ArbSignContext, ShapeReject, TxShapeValidator, ValidatedShape};

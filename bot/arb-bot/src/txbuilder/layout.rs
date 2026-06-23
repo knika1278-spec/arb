@@ -280,7 +280,14 @@ mod tests {
         let l1 = leg(DexKind::OrcaWhirlpool, SwapDir::BtoA, 5);
         // 1 leg < MIN_LEGS.
         assert!(matches!(
-            build_arb_n_instruction(key(200), key(1), 1, 1, &[l0.clone()], &[ata(10)]),
+            build_arb_n_instruction(
+                key(200),
+                key(1),
+                1,
+                1,
+                std::slice::from_ref(&l0),
+                &[ata(10)]
+            ),
             Err(TxBuilderError::BadLegCount { .. })
         ));
         // 2 legs but 3 cycle ATAs (must be one per leg).

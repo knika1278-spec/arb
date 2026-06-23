@@ -34,10 +34,10 @@ config-check:     ## loader::validate + program-id <-> toml cross-check
 
 audit:            ## supply-chain: known-vuln advisories + policy
 	cargo audit
-	cargo deny check
+	cargo deny --config infra/deny.toml check
 	bash infra/audit/verify-integrity.sh
 
-deny: ; cargo deny check
+deny: ; cargo deny --config infra/deny.toml check
 
 verify-build:     ## reproducible/verifiable on-chain build hash (needs solana-verify)
 	bash ops/scripts/verify_build.sh

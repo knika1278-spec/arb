@@ -13,6 +13,7 @@ pub mod config;
 pub mod facade;
 pub mod jito;
 pub mod landing_loop;
+pub mod presim;
 pub mod regions;
 pub mod registry;
 pub mod setup;
@@ -26,6 +27,9 @@ pub use jito::{
     JitoTransport,
 };
 pub use landing_loop::{run_landing_loop, AttemptResult, BlockhashSource, LandingTransport};
+pub use presim::{
+    evaluate_pre_tip, run_pre_tip_gate, PreTipOk, PreTipReject, PreTipSimResult, PreTipSimulator,
+};
 pub use regions::{RegionRanker, RegionRateLimiter};
 pub use registry::{InflightGuard, WritableAccountRegistry};
 pub use setup::{

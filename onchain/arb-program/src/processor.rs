@@ -115,6 +115,15 @@ fn process_two_leg(accounts: &[AccountInfo], instruction_data: &[u8]) -> Program
         },
     )?;
 
+    // ---- add-2: round-trip closure — the intermediate asset must be fully consumed back to
+    // its pre-trade level (leg B spent exactly the measured leg-A delta). A mis-resolved leg B
+    // that strands the intermediate yet still grows the base is rejected here, before the
+    // profit-assert — the inventory-safety invariant (no base<->intermediate drift; §6/add-2).
+    let intermediate_after_b = read_token_amount(intermediate_ata)?;
+    if intermediate_after_b != pre_intermediate {
+        return Err(to_program_error(ArbError::RouteDoesNotClose));
+    }
+
     // ---- Terminal profit-assert: post_base >= pre_base + min_profit, else revert ALL ----
     let post_base = read_token_amount(base_ata)?;
     let required = pre_base.checked_add(data.min_profit).ok_or_else(overflow)?;
@@ -152,6 +161,14 @@ fn process_n_leg(accounts: &[AccountInfo], instruction_data: &[u8]) -> ProgramRe
     let base_ata = &atas[0];
     let pre_base = read_token_amount(base_ata)?;
 
+    // add-2 (N-leg): snapshot each intermediate ATA (ata[1..n]) so we can prove the cycle
+    // closes — every intermediate asset must return to its pre-trade level (no stranded
+    // inventory). ata[0] (base) is gated by the terminal profit-assert instead.
+    let mut pre_inter = [0u64; crate::instruction::MAX_LEGS];
+    for (slot, ata) in pre_inter.iter_mut().zip(atas.iter()).skip(1) {
+        *slot = read_token_amount(ata)?;
+    }
+
     // Walk each leg, chaining the ACTUAL measured output delta into the next leg's input.
     let mut cursor = 1usize.checked_add(n).ok_or_else(bad)?;
     let mut carry = 0u64;
@@ -188,6 +205,13 @@ fn process_n_leg(accounts: &[AccountInfo], instruction_data: &[u8]) -> ProgramRe
             return Err(to_program_error(ArbError::SlippageExceeded));
         }
         carry = delta;
+    }
+
+    // ---- add-2 (N-leg) closure: every intermediate must return to its pre-trade level ----
+    for (pre, ata) in pre_inter.iter().zip(atas.iter()).skip(1) {
+        if read_token_amount(ata)? != *pre {
+            return Err(to_program_error(ArbError::RouteDoesNotClose));
+        }
     }
 
     // ---- Terminal profit-assert on the base ATA: post_base >= pre_base + min_profit ----
