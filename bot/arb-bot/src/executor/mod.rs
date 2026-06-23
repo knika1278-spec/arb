@@ -11,7 +11,9 @@
 
 pub mod config;
 pub mod facade;
+pub mod jito;
 pub mod landing_loop;
+pub mod regions;
 pub mod registry;
 pub mod setup;
 pub mod tip;
@@ -19,7 +21,12 @@ pub mod types;
 
 pub use config::{ConfigError, ExecutorConfig};
 pub use facade::{land, LandDeps, LandError, LandRequest, SignerHandle};
+pub use jito::{
+    BundleFinalStatus, BundleReceipt, BundleSimSummary, ConfirmationLevel, JitoClient, JitoError,
+    JitoTransport,
+};
 pub use landing_loop::{run_landing_loop, AttemptResult, BlockhashSource, LandingTransport};
+pub use regions::{RegionRanker, RegionRateLimiter};
 pub use registry::{InflightGuard, WritableAccountRegistry};
 pub use setup::{
     AuthError, EndpointProbe, JitoAuth, SenderEndpoint, TipAccountError, TipAccountSet,
