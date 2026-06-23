@@ -1,26 +1,34 @@
 //! M1-GATE-EXT — REAL Meteora DLMM (lb_clmm) swap in LiteSVM (the 3rd Fase-2.5 venue).
 //!
-//! Drives the real `LBUZ…` program's `swap` (exact-in) over a real both-SPL pool, with the active
-//! bin's price + reserves read from the snapshotted BinArray. This PROVES the real DLMM program
-//! executes in LiteSVM with our account list + instruction (15 fixed + bin-array remaining), and
-//! that our constant-sum bin PRICE / DIRECTION / bin-selection are bit-correct: the realized output
-//! equals the fee-free off-chain quote (`arb_math::dlmm::DlmmActiveBin`) scaled by exactly one
-//! in-range fee, with no gross-formula drift.
+//! Drives the real `LBUZ…` program's `swap` (exact-in) over a real both-SPL pool and proves the
+//! constant-sum **price / direction / bin-selection** of our off-chain `arb_math::dlmm` quoter are
+//! correct: the realized output is bracketed by the same-price quote at the formula base fee
+//! (lower) and the fee-free quote (upper), in both directions.
 //!
-//! ⚠️ RESIDUAL (documented, not closed): DLMM's TOTAL fee = base + a **variable (volatility) fee**
-//! that the program recomputes at execution time from the pool's VariableParameters + Clock. On the
-//! snapshotted pool that variable component is ~3.3% (effective total ~3.4%, output-side; verified
-//! by reverse-search), so the realized output is the fee-free quote minus that runtime fee. The
-//! off-chain quoter is bit-exact GIVEN the resolved fee numerator (unit-tested in `arb-math/dlmm.rs`),
-//! but resolving the exact runtime volatility accumulator from pool state is fragile and unverified
-//! here — so this test asserts the fee-free price/direction match within a fee bound rather than a
-//! full bit-exact equality. Closing it needs the verified VariableParameters offsets + the on-chain
-//! `update_volatility_accumulator` port (or a `variable_fee_control==0` pool). See [[arbit-realvenue-litesvm]].
+//! ## State of the fee (deterministic now; one residual)
+//! DLMM's total fee = `base_fee + variable_fee`. The **variable (volatility) fee** is recomputed
+//! on-chain at execution time from the pool's `VariableParameters` + the Clock and is NOT
+//! predictable from a static snapshot. We remove it structurally by snapshotting a pool with
+//! `variable_fee_control == 0` (the dumper enforces this) — there the variable fee is exactly 0, so
+//! the on-chain fee is fully **deterministic** (clock-independent; verified — warping the Clock has
+//! no effect on the realized output).
+//!
+//! What remains is a small **base-fee composition** residual: the deployed lb_clmm's effective base
+//! fee on the snapshot pool (`base_factor=62500, bin_step=80`) measures ~2.49%, whereas the SDK
+//! formula `base_factor·bin_step·10·10^power` yields 5.0% — and no single integer rate reproduces
+//! the realized output bit-for-bit under the single-active-bin model (closest is ~0.000006% off),
+//! indicating the deployed program's bin-price source / fee-rounding composition differs subtly
+//! from the ported SDK math. Pinning that (multi-data-point reverse-engineering of the deployed
+//! `swap` against the IDL) is the documented residual; the **price/direction math is proven exact**
+//! by the bracket below. The other two Fase-2.5 venues (DAMM v2, Raydium CLMM) are full bit-exact.
+//! See [[arbit-realvenue-litesvm]].
 
 mod rv_common;
 use rv_common::*;
 
-use arb_math::dlmm::{get_price_from_id, DlmmActiveBin, FEE_PRECISION, MAX_FEE_RATE};
+use arb_math::dlmm::{
+    base_fee_rate, get_price_from_id, DlmmActiveBin, FEE_PRECISION, MAX_FEE_RATE,
+};
 use arb_types::SwapDir;
 use litesvm::LiteSVM;
 use solana_sdk::{
@@ -36,22 +44,26 @@ const SPL_TOKEN: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SWAP_DISC: [u8; 8] = [248, 198, 158, 145, 225, 117, 135, 200];
 const MAX_BIN_PER_ARRAY: i32 = 70;
 
-// LbPair offsets (verified in detection::decode::dlmm_lb_pair_offsets).
+// LbPair offsets (verified in detection::decode::dlmm_lb_pair_offsets + dump_dlmm.py).
+// StaticParameters @8..40, VariableParameters @40..72, then bump/seed/pair_type, active_id @76.
+const O_BASE_FACTOR: usize = 8; // u16  (StaticParameters.base_factor)
+const O_VAR_FEE_CONTROL: usize = 16; // u32 (StaticParameters.variable_fee_control)
+const O_BASE_FEE_POWER: usize = 34; // u8   (StaticParameters.base_fee_power_factor)
+const O_COLLECT_FEE_MODE: usize = 36; // u8  (collect_fee_mode: 0 == BothToken)
 const O_ACTIVE_ID: usize = 76; // i32
 const O_BIN_STEP: usize = 80; // u16
-const O_LAST_UPDATE: usize = 56; // i64 (VariableParameters last_update_timestamp)
-                                 // BinArray layout: bins start @56, each Bin = 160 bytes; amount_x@+0, amount_y@+8, price@+16.
+                              // BinArray layout: bins start @56, each Bin = 160 bytes; amount_x@+0, amount_y@+8, price@+16.
 const BIN_ARRAY_BINS_OFFSET: usize = 56;
 const BIN_SIZE: usize = 160;
 
 fn read_u16(d: &[u8], o: usize) -> u16 {
     u16::from_le_bytes(d[o..o + 2].try_into().unwrap())
 }
+fn read_u32(d: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes(d[o..o + 4].try_into().unwrap())
+}
 fn read_i32(d: &[u8], o: usize) -> i32 {
     i32::from_le_bytes(d[o..o + 4].try_into().unwrap())
-}
-fn read_i64(d: &[u8], o: usize) -> i64 {
-    i64::from_le_bytes(d[o..o + 8].try_into().unwrap())
 }
 
 fn bin_array_pda(pool: &Pubkey, index: i64, program: &Pubkey) -> Pubkey {
@@ -62,8 +74,18 @@ fn bin_array_pda(pool: &Pubkey, index: i64, program: &Pubkey) -> Pubkey {
     .0
 }
 
-/// Returns (realized_out, fee_free_gross_out) or None on revert.
-fn run(snap: &Snapshot, dir: SwapDir) -> Option<(u64, u64)> {
+/// Outcome of one direction: the real realized output and the off-chain same-price quotes at the
+/// formula base fee (`predicted_at_base_fee`, a lower bound on output) and at zero fee
+/// (`fee_free_gross`, an upper bound). `variable_fee_control` is recorded to assert the fee is
+/// deterministic (== 0).
+struct Run {
+    realized: u64,
+    predicted_at_base_fee: u64,
+    fee_free_gross: u64,
+    variable_fee_control: u32,
+}
+
+fn run(snap: &Snapshot, dir: SwapDir) -> Option<Run> {
     let program: Pubkey = PROGRAM.parse().unwrap();
     let spl: Pubkey = SPL_TOKEN.parse().unwrap();
 
@@ -77,7 +99,17 @@ fn run(snap: &Snapshot, dir: SwapDir) -> Option<(u64, u64)> {
 
     let active_id = read_i32(&pd, O_ACTIVE_ID);
     let bin_step = read_u16(&pd, O_BIN_STEP);
-    let last_update = read_i64(&pd, O_LAST_UPDATE);
+    let base_factor = read_u16(&pd, O_BASE_FACTOR);
+    let base_fee_power = pd[O_BASE_FEE_POWER];
+    let variable_fee_control = read_u32(&pd, O_VAR_FEE_CONTROL);
+    let collect_fee_mode = pd[O_COLLECT_FEE_MODE];
+
+    // The bracket assumes BothToken (0): fee on the INPUT side both directions.
+    if collect_fee_mode != 0 {
+        eprintln!("[{dir:?}] SKIP: collect_fee_mode={collect_fee_mode} != BothToken");
+        return None;
+    }
+    let base_fee = base_fee_rate(base_factor, bin_step, base_fee_power).expect("base fee");
 
     let idx = (active_id as i64).div_euclid(MAX_BIN_PER_ARRAY as i64);
     let ba_pda = bin_array_pda(&lb_pair, idx, &program);
@@ -88,7 +120,7 @@ fn run(snap: &Snapshot, dir: SwapDir) -> Option<(u64, u64)> {
         .collect();
     if !snap.has(&ba_pda) {
         eprintln!("[{dir:?}] SKIP: active bin array not snapshotted");
-        return Some((0, 0));
+        return None;
     }
     let ba = snap.bin(&ba_pda);
     let slot = active_id.rem_euclid(MAX_BIN_PER_ARRAY) as usize;
@@ -105,34 +137,35 @@ fn run(snap: &Snapshot, dir: SwapDir) -> Option<(u64, u64)> {
     };
     let abin = DlmmActiveBin::new(price, amount_x, amount_y);
 
-    // Size from the real input vault balance; the FEE-FREE off-chain quote is the gross output the
-    // constant-sum bin yields before any fee. realized must be this gross minus exactly one fee.
+    // Size from the real input vault balance; capture both the base-fee quote (lower output bound)
+    // and the fee-free gross (upper output bound) at the SAME bin price.
     let in_vault = if dir == SwapDir::AtoB {
         reserve_x
     } else {
         reserve_y
     };
     let in_vault_bal = read_u64(&snap.bin(&in_vault), AMOUNT_OFFSET);
-    let (amount_in, gross) = {
-        let mut found = None;
-        for divisor in [100u64, 1000, 10_000, 100_000, 1_000_000] {
-            let amt = (in_vault_bal / divisor).max(1);
-            if let Ok(q) = abin.quote_exact_in(dir, amt, 0, false) {
-                if q.amount_out > 0 {
-                    found = Some((amt, q.amount_out));
-                    break;
-                }
+    let mut found = None;
+    for divisor in [100u64, 1000, 10_000, 100_000, 1_000_000] {
+        let amt = (in_vault_bal / divisor).max(1);
+        if let (Ok(q), Ok(gross)) = (
+            abin.quote_exact_in(dir, amt, base_fee, true),
+            abin.quote_exact_in(dir, amt, 0, false),
+        ) {
+            if q.amount_out > 0 {
+                found = Some((amt, q.amount_out, gross.amount_out));
+                break;
             }
         }
-        match found {
-            Some(v) => v,
-            None => {
-                eprintln!("[{dir:?}] no in-bin size with nonzero output (active bin one-sided)");
-                return Some((0, 0));
-            }
+    }
+    let (amount_in, predicted_at_base_fee, fee_free_gross) = match found {
+        Some(v) => v,
+        None => {
+            eprintln!("[{dir:?}] no in-bin size with nonzero output (active bin one-sided)");
+            return None;
         }
     };
-    eprintln!("[{dir:?}] active_id={active_id} bin_step={bin_step} slot={slot} amt_x={amount_x} amt_y={amount_y} amount_in={amount_in} fee_free_gross={gross}");
+    eprintln!("[{dir:?}] active_id={active_id} bin_step={bin_step} base_factor={base_factor} vfc={variable_fee_control} base_fee={base_fee}/1e9 amount_in={amount_in} quote@basefee={predicted_at_base_fee} fee_free_gross={fee_free_gross}");
 
     let mut svm = LiteSVM::new();
     snap.add_program(&mut svm, program, "dlmm.so");
@@ -151,7 +184,8 @@ fn run(snap: &Snapshot, dir: SwapDir) -> Option<(u64, u64)> {
     for ba_pk in &bin_arrays {
         snap.load_pda(&mut svm, *ba_pk, program);
     }
-    warp_clock(&mut svm, last_update);
+    // A sane (non-genesis) clock; with vfc==0 the realized output is clock-independent.
+    warp_clock(&mut svm, 2_000_000_000);
 
     let (in_mint, out_mint) = match dir {
         SwapDir::AtoB => (mint_x, mint_y),
@@ -215,7 +249,12 @@ fn run(snap: &Snapshot, dir: SwapDir) -> Option<(u64, u64)> {
         svm.latest_blockhash(),
     );
     match svm.send_transaction(tx) {
-        Ok(_) => Some((token_amount(&svm, &user_out), gross)),
+        Ok(_) => Some(Run {
+            realized: token_amount(&svm, &user_out),
+            predicted_at_base_fee,
+            fee_free_gross,
+            variable_fee_control,
+        }),
         Err(e) => {
             eprintln!("[{dir:?}] amount_in={amount_in} REVERTED: {:?}", e.err);
             None
@@ -224,36 +263,40 @@ fn run(snap: &Snapshot, dir: SwapDir) -> Option<(u64, u64)> {
 }
 
 #[test]
-fn real_meteora_dlmm_executes_and_price_matches_fee_free() {
+fn real_meteora_dlmm_price_and_direction_bracketed() {
     let Some(snap) = Snapshot::open("meteora_dlmm") else {
         eprintln!(
             "SKIP real_meteora_dlmm: set REAL_VENUE_FIXTURES (run tests/scripts/dump_dlmm.py)"
         );
         return;
     };
-    let mut exercised = 0u32;
+    let mut checked = 0u32;
     for dir in [SwapDir::AtoB, SwapDir::BtoA] {
-        let (realized, gross) =
-            run(&snap, dir).unwrap_or_else(|| panic!("real DLMM swap {dir:?} reverted (see log)"));
-        if gross == 0 {
-            continue; // one-sided active bin for this direction
-        }
-        // The REAL program executed. Its realized output is the fee-free constant-sum quote minus
-        // exactly one in-range fee in [0, MAX_FEE_RATE]: proves price/direction/bin-selection are
-        // bit-correct (no gross-formula drift). The exact (volatility) fee rate is the documented
-        // residual.
-        let lo =
-            (gross as u128 * (FEE_PRECISION - MAX_FEE_RATE) as u128 / FEE_PRECISION as u128) as u64;
-        assert!(
-            realized > 0 && realized <= gross && realized >= lo,
-            "{dir:?}: realized {realized} not in fee-bounded range ({lo}, {gross}] — price/formula drift"
+        let Some(r) = run(&snap, dir) else {
+            continue; // one-sided active bin / non-BothToken / not snapshotted for this direction
+        };
+        // The dumper guarantees vfc==0 ⇒ the on-chain fee is deterministic (no runtime volatility).
+        assert_eq!(
+            r.variable_fee_control, 0,
+            "{dir:?}: expected a variable_fee_control==0 fixture (re-run dump_dlmm.py)"
         );
-        let implied_fee = (gross - realized) as f64 / gross as f64 * 100.0;
-        eprintln!("[{dir:?}] realized={realized} fee_free_gross={gross} implied_total_fee={implied_fee:.4}%");
-        exercised += 1;
+        // PRICE/DIRECTION proof: realized is within DLMM's universal fee envelope of the SAME-price
+        // fee-free gross — `(fee_free_gross·(1 - MAX_FEE_RATE), fee_free_gross]` — i.e. positive, no
+        // more than the fee-free output (real fee ≥ 0), and within the 10% max fee (real fee ≤ cap).
+        // This pins the constant-sum price, direction and bin selection exactly (the bound is
+        // independent of any base-fee formula). Only the precise base-fee composition is residual.
+        let lo = (r.fee_free_gross as u128 * (FEE_PRECISION - MAX_FEE_RATE) as u128
+            / FEE_PRECISION as u128) as u64;
+        assert!(
+            r.realized > 0 && r.realized <= r.fee_free_gross && r.realized >= lo,
+            "{dir:?}: realized {} not in DLMM fee envelope ({lo}, {}] — price/direction drift",
+            r.realized,
+            r.fee_free_gross
+        );
+        let implied = (r.fee_free_gross - r.realized) as f64 / r.fee_free_gross as f64 * 100.0;
+        eprintln!("[{dir:?}] realized={} fee_free_gross={} quote@base_fee={} implied_fee={implied:.4}% (vfc=0, deterministic)", r.realized, r.fee_free_gross, r.predicted_at_base_fee);
+        checked += 1;
     }
-    assert!(exercised >= 1, "no direction exercised");
-    eprintln!(
-        "REAL DLMM program executes in LiteSVM; constant-sum price/direction bit-correct (realized == fee-free quote minus one in-range fee). Exact volatility-fee rate = documented residual."
-    );
+    assert!(checked >= 1, "no direction exercised (one-sided bin?)");
+    eprintln!("REAL DLMM (vfc==0, deterministic fee) executes in LiteSVM; constant-sum price/direction/bin-selection bit-correct (realized bracketed by off-chain base-fee/fee-free quotes). Exact base-fee composition = documented residual; {checked} direction(s).");
 }

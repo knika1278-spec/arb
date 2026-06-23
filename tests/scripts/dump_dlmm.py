@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Snapshot a real Meteora DLMM (lb_clmm) pool + program for the LiteSVM real-venue differential.
 
-Selects a both-SPL, status-enabled, collect_fee_mode==InputOnly, variable_fee_control==0 pool
-(so total_fee_rate == base_fee_rate, clock-independent) with a well-funded ACTIVE bin. Snapshots
-lb_pair + reserve_x/y + mints + oracle + the active BinArray. -> $REAL_VENUE_FIXTURES/meteora_dlmm.
+Selects a both-SPL, status-enabled, collect_fee_mode==BothToken, **variable_fee_control == 0** pool
+so total_fee_rate == base_fee_rate (deterministic, clock-INDEPENDENT). This is the key to a bit-exact
+differential: DLMM's variable (volatility) fee is recomputed on-chain from VariableParameters + the
+Clock and is NOT predictable from a static snapshot, but it is structurally **0** when
+variable_fee_control == 0, leaving only the deterministic base fee. Snapshots lb_pair + reserve_x/y +
+mints + oracle + the active BinArray (+ neighbours). -> $REAL_VENUE_FIXTURES/meteora_dlmm.
 """
 import base64, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,25 +31,27 @@ def bin_array_pda(pool, index):
     return cs.find_pda([b"bin_array", cs.pk_bytes(pool), int(index).to_bytes(8, "little", signed=True)], PROGRAM)[0]
 
 def qualifies(d):
-    # both-SPL enforced server-side; check status here (RPC caps filters at 4). Variable fee is
-    # neutralized in-test (warp Clock -> full volatility decay, single-bin trade -> accumulator 0).
-    return len(d) == LEN and d[O["status"]] == 0 and d[O["collect_fee_mode"]] == 0
+    # vfc==0 enforced server-side; verify here + status, BothToken collect mode, and both-SPL
+    # (flag_x/y == 0, no Token-2022 transfer-fee complication). RPC caps filters at 4.
+    return (len(d) == LEN and d[O["status"]] == 0 and d[O["collect_fee_mode"]] == 0
+            and ru32(d, O["var_fee_control"]) == 0 and d[O["flag_x"]] == 0 and d[O["flag_y"]] == 0)
 
 def main():
     print("getVersion:", cs.rpc("getVersion", []).get("result"))
-    # token_y == WSOL, both-SPL (flag_x/y==0); 4 filters max. memcmp "1" == base58 of 0x00 byte.
+    # token_y == WSOL + variable_fee_control@16 == 0 + status@82 == 0; 4 filters max. memcmp "1" ==
+    # base58 of one 0x00 byte; "1111" == four 0x00 bytes (the u32 vfc == 0). both-SPL re-checked below.
     v = cs.rpc("getProgramAccounts", [PROGRAM, {
         "encoding": "base64",
         "filters": [
             {"dataSize": LEN},
             {"memcmp": {"offset": O["mint_y"], "bytes": WSOL}},
-            {"memcmp": {"offset": O["flag_x"], "bytes": "1"}},
-            {"memcmp": {"offset": O["flag_y"], "bytes": "1"}},
+            {"memcmp": {"offset": O["var_fee_control"], "bytes": "1111"}},
+            {"memcmp": {"offset": O["status"], "bytes": "1"}},
         ],
         "dataSlice": {"offset": O["reserve_y"], "length": 32},
     }])
     accts = v.get("result") or []
-    print(f"  {len(accts)} both-SPL token_y==WSOL DLMM pools")
+    print(f"  {len(accts)} vfc==0 token_y==WSOL status==0 DLMM pools")
     cand = [(a["pubkey"], cs.b58encode(base64.b64decode(a["account"]["data"][0]))) for a in accts]
     sample = cand[:100]
     res = cs.rpc("getMultipleAccounts", [[r for _, r in sample], {"encoding": "base64"}])
