@@ -6,6 +6,15 @@ per-venue dump_<venue>.py scripts to snapshot a real program .so + a pool's acco
 mainnet into $REAL_VENUE_FIXTURES/<venue>/{<pubkey>.bin, manifest.txt, <name>.so}.
 """
 import base64, json, os, subprocess
+from solders.pubkey import Pubkey as _Pk
+
+def find_pda(seeds, program_id_b58):
+    """Solana find_program_address (off-curve PDA). seeds = list of bytes; returns (b58, bump)."""
+    pda, bump = _Pk.find_program_address(seeds, _Pk.from_string(program_id_b58))
+    return str(pda), bump
+
+def pk_bytes(b58):
+    return bytes(_Pk.from_string(b58))
 
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 def b58encode(b: bytes) -> str:

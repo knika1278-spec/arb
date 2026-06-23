@@ -66,6 +66,26 @@ impl Snapshot {
             .unwrap_or_else(|_| panic!("fixture {pubkey}.bin"))
     }
 
+    /// Whether a `<pubkey>.bin` fixture exists (e.g. an initialized tick/bin array PDA).
+    pub fn has(&self, pubkey: &Pubkey) -> bool {
+        self.dir.join(format!("{pubkey}.bin")).exists()
+    }
+
+    /// `set_account` a snapshotted PDA (tick/bin array, oracle) at its pubkey with `owner`.
+    pub fn load_pda(&self, svm: &mut LiteSVM, pubkey: Pubkey, owner: Pubkey) {
+        svm.set_account(
+            pubkey,
+            Account {
+                lamports: 10_000_000,
+                data: self.bin(&pubkey),
+                owner,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
     pub fn role_bin(&self, role: &str) -> Vec<u8> {
         self.bin(&self.pk(role))
     }
