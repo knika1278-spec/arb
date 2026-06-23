@@ -25,6 +25,8 @@
 Workspace is **green**: `cargo build/test/clippy -D warnings/fmt` pass (**234 tests**, host + WSL), `config-check` validates.
 
 > **2026-06-22 BREAKTHROUGH — `build-sbf` + M1-GATE unblocked (WSL2 Ubuntu 24.04).** The on-chain `.so` now builds (`cargo build-sbf --tools-version v1.54`, agave 2.3.13) and the **M1-GATE rounding-mirror differential is GREEN for the constant-product path** in LiteSVM (`tests/litesvm-tests/tests/m1_gate.rs` + `tests/swap-harness`): on-chain realized round-trip == off-chain `arb_math::RoundTrip::realized_out`, bit-exact (3 sizes), plus revert-on-unprofitable + reject-non-allowlisted-dex. CPI discriminators filled (Anchor sha256). **dec-1 closed = Agave 2.3.x.** Residual for FULL M1-GATE: Surfpool real-venues (onchain-11), Token-2022 fee path, BtoA/Orca sqrt-price.
+>
+> **2026-06-23 — `build-sbf` re-verified GREEN in MAIN.** The committed `Cargo.lock` had drifted to edition2024 crates that Agave platform-tools' Cargo 1.84 cannot parse; pinned them back (`proc-macro-crate 3.3.0`, `zeroize 1.8.1`, `blake3 1.6.1`, `indexmap 2.9.0`, `hashbrown 0.15.5`) — `cargo build-sbf` now produces `arb_program.so` + `swap_harness.so` and the **full LiteSVM suite is GREEN on main**: `m1_gate_differential_roundtrip_matches_offchain`, `m1_gate_reverts_when_unprofitable`, `reverts_on_non_allowlisted_dex`, `arb_program_loads_and_executes_in_litesvm`, + 2 smoke (6/6, real `.so`, NO skips). Host `cargo check --locked` stays green (pins compatible with Cargo 1.96). Residual unchanged: Surfpool real-venues, Token-2022 negative, CU-budget assert, BtoA/Orca on-chain.
 
 - **Done:** workspace + 8 members; `arb-config` (no_std allowlist+limits, std providers/secrets/loader); `arb-types` (ArbError 6000-base, DexKind, SwapDir, **`CostTerms`/`min_profit` = dec-3**); **`arb-math` = the M1-GATE math core** (bit-exact cpmm quote/required-in, RoundTrip, opportunity predicate, Token-2022 fee fwd/inverse, optimal-delta search, 92.5% policy); `onchain/arb-program` skeleton (unpack/pack, trust boundary, zero-copy balance read, Token-2022 vetting, processor); `detection` module (idempotent cache, pair graph, decode, reconnect, gRPC seam); `sizing` wrapper.
 - **Done (host-logic, this session):**
@@ -96,7 +98,7 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 - [ ] 🟡 ★ `onchain-6` Raydium CPMM swap adapter *(onchain · 3d · onchain-3,4,5)* — adapter + Anchor `swap_base_input` discriminator filled; CP math proven via LiteSVM M1-GATE; real-venue rounding pending Surfpool 🔒
 - [ ] 🟡 `onchain-7` Orca Whirlpool swap_v2 adapter *(onchain · 3d · onchain-3,4,5)* — `swap_v2` discriminator filled; sqrt-price mirror still CP-approx, pending Surfpool 🔒
 - [ ] 🟡 ★ `onchain-8` Processor: snapshot→CPI A→delta→CPI B→terminal assert *(onchain · 3d · onchain-6,7)* — skeleton done; awaits real adapters
-- [ ] 🟡 ★ `onchain-9` LiteSVM unit tests: revert, success, trust-boundary, CU *(onchain · 3d · onchain-8)* — success + revert-unprofitable + non-allowlisted-dex GREEN (m1_gate.rs); CU-budget assert + Token-2022 negative still TODO
+- [ ] 🟡 ★ `onchain-9` LiteSVM unit tests: revert, success, trust-boundary, CU *(onchain · 3d · onchain-8)* — success + revert-unprofitable + non-allowlisted-dex GREEN (m1_gate.rs), **re-verified in main 2026-06-23 via build-sbf (real `.so`)**; CU-budget assert + Token-2022 negative still TODO
 - [ ] 🟡 ★ `onchain-10` Rounding-mirror fuzz/property gate (per-venue, both dirs) — **M1-GATE** *(onchain · 4d · onchain-9, sizing-8)* — CP path GREEN via LiteSVM (3 sizes, AtoB); both-dirs + per-venue fuzz + Surfpool real-venue residual
 - [ ] 🔒 `onchain-11` Surfpool mainnet-fork integration test (revert on real programs) *(onchain · 3d · onchain-10)*
 
@@ -138,8 +140,8 @@ v0-tx + ALT + ComputeBudget, single atomic tx via a third-party arb program — 
 ### testing
 - [x] `testing-2` Pool + mint builders for LiteSVM *(testing · 4d · testing-1, sizing-7)* — token-account + pool builders in m1_gate.rs (direct-balance harness model)
 - [x] `testing-3` SwapHarness test program + single-leg client *(testing · 3d · testing-2)* — `tests/swap-harness` CP program (build-sbf), driven by m1_gate.rs
-- [ ] 🔒 `testing-4` LiteSVM unit tests: revert + exact-delta + boundary *(testing · 3d · testing-2,3, sizing-4, onchain-8)*
-- [ ] 🟡 ★ `testing-5` **M1-GATE**: differential/property rounding-mirror test *(testing · 5d · testing-2,3, sizing-8, onchain-10)* — CP differential GREEN (m1_gate.rs); fuzz + both-dirs + Token-2022 + Surfpool residual
+- [ ] 🟡 `testing-4` LiteSVM unit tests: revert + exact-delta + boundary *(testing · 3d · testing-2,3, sizing-4, onchain-8)* — build-sbf unblocked in main (2026-06-23); revert (`m1_gate_reverts_when_unprofitable`) + exact-delta (`m1_gate_differential_roundtrip_matches_offchain`) GREEN via real `.so`; explicit boundary/CU cases residual
+- [ ] 🟡 ★ `testing-5` **M1-GATE**: differential/property rounding-mirror test *(testing · 5d · testing-2,3, sizing-8, onchain-10)* — CP differential GREEN (m1_gate.rs), **re-verified in main 2026-06-23 via build-sbf**; fuzz + both-dirs + Token-2022 + Surfpool residual
 - [ ] 🔒 `testing-6` Trust-boundary + Token-2022 filter negative tests *(testing · 3d · testing-2,4, onchain-3,5)*
 - [ ] 🔒 `testing-7` CU / account-lock / tx-byte budget + ALT pre-warm asserts *(testing · 2d · testing-4, txbuilder-9)*
 - [ ] 🔒 `testing-8` Surfpool mainnet-fork integration vs real Raydium/Orca *(testing · 5d · testing-4,6, txbuilder-12)*
@@ -286,8 +288,8 @@ The completeness pass found these load-bearing items unowned in the DAG. Items (
 ## Integration milestones (go/no-go checkpoints)
 
 - [ ] 🟡 **M0** Workspace foundation green — scaffold-3,4,7,9,10 *(blocked only on scaffold-7 Solscan verification)*
-- [ ] 🟡 **M0.5** Skeleton builds + LiteSVM revert proven — onchain-1,8,9, scaffold-11, testing-1 — **build-sbf works + LiteSVM revert GREEN**; CU/Token-2022 negatives residual
-- [ ] 🟡 **M1-GATE** Rounding-mirror gate — **THE hard go/no-go** — **CP path GREEN in LiteSVM (2026-06-22)**; NOT fully closed: needs Surfpool real-venues + Token-2022 + both-dirs/Orca before mainnet capital — sizing-8, onchain-9,10, sizing-9, testing-5
+- [ ] 🟡 **M0.5** Skeleton builds + LiteSVM revert proven — onchain-1,8,9, scaffold-11, testing-1 — **build-sbf works + LiteSVM revert GREEN (re-verified in main 2026-06-23, 6/6 LiteSVM tests on real `.so`)**; CU/Token-2022 negatives residual
+- [ ] 🟡 **M1-GATE** Rounding-mirror gate — **THE hard go/no-go** — **CP path GREEN in LiteSVM (2026-06-22; re-verified in main 2026-06-23 via build-sbf, real `.so`)**; NOT fully closed: needs Surfpool real-venues + Token-2022 + both-dirs/Orca before mainnet capital — sizing-8, onchain-9,10, sizing-9, testing-5
 - [ ] 🔒 **M1.5** Atomic tx builds + reverts on real programs (fork) — txbuilder-5,6,9,12, onchain-11, testing-8
 - [ ] ⚠️ **NICHE-COVERAGE go/no-go (added 2026-06-22)** — before Fase-2 capital, confirm Wave-1 (Raydium CPMM + Orca Whirlpool + PumpSwap) actually reaches a live opportunity stream. On-chain audit evidence: pump.fun graduations land on PumpSwap (✓ Wave-1) but the deepest mispricings observed (ANB) were **intra-Meteora (DAMM v2 ↔ DLMM)** and the dex-to-dex sample's sell leg was **Raydium CLMM** — both outside the *original* Wave-1 set. Decision: either accept the narrower CPMM/Whirlpool/PumpSwap slice for first-land, or gate first-land behind Fase 2.5 venues. See `plan.md` §4 + §10.
 - [ ] **M2** First profitable mainnet land via Jito — landing-4,6,8,9, signer-8, observ-14
