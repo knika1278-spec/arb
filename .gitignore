@@ -47,3 +47,9 @@ Thumbs.db
 .surfpool/
 test-ledger/
 node_modules/
+
+# ---------------------------------------------------------------------------
+# Scratch / local reference dumps (mainnet program source, account blobs, etc.)
+# Kept locally for analysis; never published.
+# ---------------------------------------------------------------------------
+.scratch-*/

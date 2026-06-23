@@ -1,0 +1,15 @@
+# Line-ending policy: store and check out LF everywhere.
+# CI runs on Linux and the repo ships shell scripts (require LF), so LF is the
+# single source of truth on every platform. This overrides Windows
+# `core.autocrlf=true` per-file and eliminates the CRLF churn that made tracked
+# files show as "modified" with no real content change.
+* text=auto eol=lf
+
+# Belt-and-suspenders: never EOL-convert or diff these as text if ever added
+# (on-chain ELF dumps, account-state blobs, images, archives, wasm).
+*.so   binary
+*.bin  binary
+*.png  binary
+*.gz   binary
+*.zip  binary
+*.wasm binary
